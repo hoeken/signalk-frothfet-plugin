@@ -8,6 +8,22 @@ module.exports = function (app) {
     plugin.description = 'Plugin for interfacing with Yarrboard';
     
     plugin.connections = [];
+
+    plugin.channelMetas = {
+        "id": {"units": "", "description": "ID of each channel."},
+        "name": {"units": "", "description": "User defined name of channel."},
+        "type": {"units": "", "description": "Channel type.  Currently only 'mosfet'."},
+        "enabled": {"units": "", "description": "Whether or not this channel is in use or should be ignored."},
+        "hasPWM": {"units": "", "description": "Whether this channel hardware is capable of PWM (duty cycle, dimming, etc)"},
+        "hasCurrent": {"units": "", "description": "Whether this channel has current monitoring."},
+        "softFuse": {"units": "A", "description": "Software defined fuse, in amps."},
+        "isDimmable": {"units": "", "description": "Whether the channel has dimming enabled or not."},
+        "state": {"units": "", "description": "Whether the channel is on or not."},
+        "duty": {"units": "%", "description": "Duty cycle as a percentage from 0 to 1"},
+        "current": {"units": "A", "description": "Current in amps"},
+        "aH": {"units": "aH", "description": "Consumed amp hours since board restart"},
+        "wH": {"units": "wH", "description": "Consumed watt hours since board restart"},
+    }
   
     plugin.start = function (options, restartPlugin) {
         // Here we put our plugin logic
@@ -75,13 +91,17 @@ module.exports = function (app) {
         yb.config = false;
         yb.closed = false;
 
+        yb.metaPaths = [];
+        yb.metas = [];
+        yb.deltas = [];
+
         yb.hostname = hostname;
         yb.username = username;
         yb.password = password;
         yb.require_login = require_login;
 
         yb.boardname = hostname.split(".")[0];
-    
+
         yb.createWebsocket = function ()
         {
             var ws = new W3CWebSocket(`ws://${this.hostname}/ws`);
@@ -255,25 +275,30 @@ module.exports = function (app) {
         {
             this.config = data;
 
-            let updates = [];
             let mainPath = this.getMainBoardPath();
 
-            updates.push(this.formatDelta(`${mainPath}/board/version`, data.version));
-            updates.push(this.formatDelta(`${mainPath}/board/name`, data.name));
-            updates.push(this.formatDelta(`${mainPath}/board/uuid`, data.uuid));
+            //console.log(JSON.stringify(data));
+
+            this.queueUpdate(`${mainPath}/board/version`, data.version, "", "Firmware version of the board.");
+            this.queueUpdate(`${mainPath}/board/name`, data.name, "", "User defined name of the board.");
+            this.queueUpdate(`${mainPath}/board/uuid`, data.uuid, "", "Unique ID of the board.");
 
             for (channel of data.channels)
             {
                 if(channel.enabled)
                 {
                     let channelPath = `${mainPath}/channel/${channel.id}`;
-                    for (const [key, value] of Object.entries(channel)) {
-                        updates.push(this.formatDelta(`${channelPath}/${key}`, value));
+                    for (const [key, value] of Object.entries(channel))
+                    {
+                        this.queueDelta(`${channelPath}/${key}`, value);
+
+                        if (plugin.channelMetas.hasOwnProperty(key))
+                            this.queueMeta(`${channelPath}/${key}`, plugin.channelMetas[key].units, plugin.channelMetas[key].description);
                     }    
                 }
             }
 
-            this.sendDeltas(updates);
+            this.sendUpdates();
         }
 
         yb.handleUpdate = function (data)
@@ -281,23 +306,28 @@ module.exports = function (app) {
             if (!this.config)
                 return;
 
-            let updates = [];
+            //console.log(JSON.stringify(data));
+
             let mainPath = this.getMainBoardPath();
 
-            updates.push(this.formatDelta(`${mainPath}/board/bus_voltage`, data.bus_voltage));
+            this.queueUpdate(`${mainPath}/board/bus_voltage`, data.bus_voltage, 'V', "Bus supply voltage");
 
             for (channel of data.channels)
             {
                 if (this.config.channels[channel.id].enabled)
                 {
                     let channelPath = `${mainPath}/channel/${channel.id}`;
-                    for (const [key, value] of Object.entries(channel)) {
-                        updates.push(this.formatDelta(`${channelPath}/${key}`, value));
-                    }    
+                    for (const [key, value] of Object.entries(channel))
+                    {
+                        this.queueDelta(`${channelPath}/${key}`, value);
+
+                        if (plugin.channelMetas.hasOwnProperty(key))
+                            this.queueMeta(`${channelPath}/${key}`, plugin.channelMetas[key].units, plugin.channelMetas[key].description);
+                    }
                 }
             }
 
-            this.sendDeltas(updates);
+            this.sendUpdates();
         }
 
         yb.getMainBoardPath = function (data)
@@ -305,20 +335,70 @@ module.exports = function (app) {
             return `electrical/yarrboard/${this.config.hostname}`;
         }
 
-        yb.formatDelta = function (path, value)
+        yb.queueUpdate = function (path, value, units, description)
         {
-            return { "path": path, "value": value };
+            this.queueDelta(path, value);
+            this.queueMeta(path, units, description);
         }
 
-        yb.sendDeltas = function (deltas)
+        yb.queueDelta = function (path, value)
         {
-            app.handleMessage(plugin.id, {
-                "updates": [
-                    {
-                        "values": deltas
-                    }
-                ]
+            this.deltas.push({ "path": path, "value": value });
+        }
+
+        yb.queueMeta = function (path, units, description)
+        {
+            //only send it once
+            //if (this.metaPaths.includes(path))
+            //    return;
+            //this.metaPaths.push(path);
+
+            //add it to our array
+            this.metas.push({
+                "path": path,
+                "value": {
+                    "units": units,
+                    "description": description
+                }
             });
+        }
+
+        yb.sendDeltas = function ()
+        {
+            if (!this.deltas.length)
+                return;
+
+            //app.debug('Deltas: %s', this.deltas.length);
+
+            app.handleMessage(plugin.id, {
+                "updates": [{
+                    "values": this.deltas
+                }]
+            });
+
+            this.deltas = [];
+        }
+
+        yb.sendMetas = function ()
+        {
+            if (!this.metas.length)
+                return;
+
+            //app.debug('Metas: %s', JSON.stringify(this.metas));
+
+            app.handleMessage(plugin.id, {
+                "updates": [{ 
+                    "meta": this.metas
+                }]
+            });
+
+            this.metas = [];
+        }
+
+        yb.sendUpdates = function ()
+        {
+            yb.sendDeltas();
+            yb.sendMetas();
         }
 
         yb.createWebsocket();
