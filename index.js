@@ -47,7 +47,7 @@ module.exports = function (app) {
     plugin.createYarrboard = function(hostname, username="admin", password="admin", require_login = false)
     {
         var yb = {};
-        yb.config = {};
+        yb.config = false;
 
         yb.hostname = hostname;
         yb.username = username;
@@ -58,13 +58,13 @@ module.exports = function (app) {
     
         yb.createWebsocket = function ()
         {
-            var client = new W3CWebSocket(`ws://${this.hostname}/ws`);
-            client.onopen = this.onopen.bind(this);
-            client.onerror = this.onerror.bind(this);
-            client.onclose = this.onclose.bind(this);
-            client.onmessage = this.onmessage.bind(this);
+            var ws = new W3CWebSocket(`ws://${this.hostname}/ws`);
+            ws.onopen = this.onopen.bind(this);
+            ws.onerror = this.onerror.bind(this);
+            ws.onclose = this.onclose.bind(this);
+            ws.onmessage = this.onmessage.bind(this);
 
-            this.client = client;
+            this.ws = ws;
         }
         
         yb.onerror = function ()
@@ -119,23 +119,23 @@ module.exports = function (app) {
             //did we not get a heartbeat?
             if (Date.now() - this.last_heartbeat > 1000 * 2)
             {
-                app.debug(`[${this.hostname}] Missed heartbeat: ` + (Date.now() - this.last_heartbeat))
-                this.client.close();
+                app.debug(`[${this.hostname}] Missed heartbeat`)
+                this.ws.close();
                 this.retryConnection();
             }
         
             //only send it if we're already open.
-            if (this.client.readyState == W3CWebSocket.OPEN)
+            if (this.ws.readyState == W3CWebSocket.OPEN)
             {
                 this.json({"cmd": "ping"});
                 setTimeout(this.sendHeartbeat.bind(this), 1000);
             }
-            else if (this.client.readyState == W3CWebSocket.CLOSING)
+            else if (this.ws.readyState == W3CWebSocket.CLOSING)
             {
                 app.debug(`[${this.hostname}] closing`);
                 this.retryConnection();
             }
-            else if (this.client.readyState == W3CWebSocket.CLOSED)
+            else if (this.ws.readyState == W3CWebSocket.CLOSED)
             {
                 app.debug(`[${this.hostname}] closed`);
                 this.retryConnection();
@@ -145,14 +145,12 @@ module.exports = function (app) {
         yb.retryConnection = function ()
         {
             //bail if its good to go
-            if (this.client.readyState == W3CWebSocket.OPEN)
+            if (this.ws.readyState == W3CWebSocket.OPEN)
                 return;
         
             //keep watching if we are connecting
-            if (this.client.readyState == W3CWebSocket.CONNECTING)
+            if (this.ws.readyState == W3CWebSocket.CONNECTING)
             {
-                app.debug(`[${this.hostname}] Waiting for connection`);
-                
                 this.retry_time++;
         
                 //tee it up.
@@ -171,7 +169,7 @@ module.exports = function (app) {
         
             //set some bounds
             let my_timeout = 500;
-            my_timeout = Math.max(my_timeout, socket_retries * 1000);
+            my_timeout = Math.max(my_timeout, this.socket_retries * 1000);
             my_timeout = Math.min(my_timeout, 60000);
         
             //tee it up.
@@ -189,10 +187,10 @@ module.exports = function (app) {
         
         yb.json = function (message)
         {
-            if (this.client.readyState == W3CWebSocket.OPEN) {
+            if (this.ws.readyState == W3CWebSocket.OPEN) {
                 try {
                     //console.log(message.cmd);
-                    this.client.send(JSON.stringify(message));
+                    this.ws.send(JSON.stringify(message));
                 } catch (error) {
                     app.debug("Send: " + error);
                 }
@@ -212,9 +210,12 @@ module.exports = function (app) {
 
             for (channel of data.channels)
             {
-                let channelPath = `${mainPath}/channel/${channel.id}`;
-                for (const [key, value] of Object.entries(channel)) {
-                    updates.push(this.formatDelta(`${channelPath}/${key}`, value));
+                if(channel.enabled)
+                {
+                    let channelPath = `${mainPath}/channel/${channel.id}`;
+                    for (const [key, value] of Object.entries(channel)) {
+                        updates.push(this.formatDelta(`${channelPath}/${key}`, value));
+                    }    
                 }
             }
 
@@ -223,6 +224,9 @@ module.exports = function (app) {
 
         yb.handleUpdate = function (data)
         {
+            if (!this.config)
+                return;
+
             let updates = [];
             let mainPath = this.getMainBoardPath();
 
@@ -230,9 +234,12 @@ module.exports = function (app) {
 
             for (channel of data.channels)
             {
-                let channelPath = `${mainPath}/channel/${channel.id}`;
-                for (const [key, value] of Object.entries(channel)) {
-                    updates.push(this.formatDelta(`${channelPath}/${key}`, value));
+                if (this.config.channels[channel.id].enabled)
+                {
+                    let channelPath = `${mainPath}/channel/${channel.id}`;
+                    for (const [key, value] of Object.entries(channel)) {
+                        updates.push(this.formatDelta(`${channelPath}/${key}`, value));
+                    }    
                 }
             }
 
@@ -241,7 +248,7 @@ module.exports = function (app) {
 
         yb.getMainBoardPath = function (data)
         {
-            return `electrical/yarrboard/${this.boardname}`;
+            return `electrical/yarrboard/${this.config.hostname}`;
         }
 
         yb.formatDelta = function (path, value)
