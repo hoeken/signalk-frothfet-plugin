@@ -12,16 +12,13 @@ module.exports = function (app) {
     plugin.start = function (options, restartPlugin) {
         // Here we put our plugin logic
         app.debug('Plugin started');
+        //app.debug('Schema: %s', JSON.stringify(options));
 
-        const hosts = options.hosts.split(",");
-        app.debug(hosts);
-
-        for (hostname of hosts)
+        for (board of options.config)
         {
-            hostname = hostname.trim();
-            let yb = plugin.createYarrboard(hostname);
-            yb.createWebsocket();
+            //app.debug('Board: %s', JSON.stringify(board));
 
+            let yb = plugin.createYarrboard(board.host.trim(), board.username, board.password, board.require_login);
             plugin.connections.push(yb);
         }
     };
@@ -32,14 +29,37 @@ module.exports = function (app) {
     };
   
     plugin.schema = {
-        type: "object",
         title: "Yarrboard",
-        description: "",
+        type: "object",
         properties: {
-            hosts: {
-                type: 'string',
-                title: 'Yarrboard hostnames, comma separated',
-                default: 'yarrboard.local'
+            config: {
+                type: 'array',
+                title: 'Add board config',
+                items: {
+                    type: 'object',
+                    properties: {
+                        host: {
+                            type: 'string',
+                            title: 'Yarrboard hostname or IP',
+                            default: 'yarrboard.local'
+                        },
+                        require_login: {
+                            type: 'boolean',
+                            title: 'Login required?',
+                            default: false,
+                        },
+                        username: {
+                            type: 'string',
+                            title: 'Username',
+                            default: 'admin',
+                        },
+                        password: {
+                            type: 'string',
+                            title: 'Password',
+                            default: 'admin',
+                        }    
+                    }
+                }
             }
         }
     };
@@ -74,7 +94,7 @@ module.exports = function (app) {
         
         yb.onopen = function ()
         {
-            console.log(`[${this.hostname}] Connected`);
+            app.debug(`[${this.hostname}] Connected`);
         
             //we are connected, reload
             this.socket_retries = 0;
@@ -92,7 +112,7 @@ module.exports = function (app) {
         };
         
         yb.onclose = function () {
-            console.log(`[${this.hostname}] Connection closed`);
+            app.debug(`[${this.hostname}] Connection closed`);
         };
         
         yb.onmessage = function (message)
@@ -106,6 +126,16 @@ module.exports = function (app) {
                         this.handleConfig(data);
                     else if (data.pong)
                         this.last_heartbeat = Date.now();
+                    else if (data.error)
+                    {
+                        app.debug(`[${this.hostname}] Error: ${data.error}`);
+                        app.setPluginError(`[${this.hostname}] ${data.error}`);
+                    }
+                    else if (data.success)
+                    {
+                        app.debug(`[${this.hostname}] Success: ${data.success}`);
+                        app.setPluginStatus(`[${this.hostname}] ${data.success}`);
+                    }
                     else
                         app.debug(data);    
                 } catch (error) {
@@ -194,7 +224,7 @@ module.exports = function (app) {
         {
             if (this.ws.readyState == W3CWebSocket.OPEN) {
                 try {
-                    //console.log(message.cmd);
+                    //app.debug(message.cmd);
                     this.ws.send(JSON.stringify(message));
                 } catch (error) {
                     app.debug(`[${this.hostname}] Send error: ${error}`);
@@ -271,6 +301,8 @@ module.exports = function (app) {
                 ]
             });
         }
+
+        yb.createWebsocket();
     
         return yb;
     }

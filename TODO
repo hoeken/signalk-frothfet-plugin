@@ -1,6 +1,4 @@
-* respect has current and has duty (firmware side?)
 * add metadata to updates
-* add username/password stuff
-* add boardname to config and use that
+* respect has current and has duty (firmware side?)
 * add in PUTS for controlling state and duty cycle
 * plugin.stop should kill connections
