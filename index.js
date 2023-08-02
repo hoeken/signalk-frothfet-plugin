@@ -46,11 +46,14 @@ module.exports = function (app) {
     plugin.createYarrboard = function(hostname, username="admin", password="admin", require_login = false)
     {
         var yb = {};
+        yb.config = {};
 
         yb.hostname = hostname;
         yb.username = username;
         yb.password = password;
         yb.require_login = require_login;
+
+        yb.boardname = hostname.split(".")[0];
     
         yb.createWebsocket = function ()
         {
@@ -79,6 +82,9 @@ module.exports = function (app) {
         
             //our connection watcher
             setTimeout(this.sendHeartbeat.bind(this), 1000);
+
+            //load our config
+            setTimeout(this.getConfig.bind(this), 50);
         
             if (this.require_login)
                 this.doLogin("admin", "admin");
@@ -93,13 +99,18 @@ module.exports = function (app) {
             if (typeof message.data === 'string') {
                 let data = JSON.parse(message.data);
                 if (data.msg == "update")
-                    true;
-                    //this.handleUpdate(data);
+                    this.handleUpdate(data);
+                else if (data.msg == "config")
+                    this.handleConfig(data);
                 else if (data.pong)
                     this.last_heartbeat = Date.now();
                 else
                     app.debug(data);
             }
+        }
+
+        yb.getConfig = function () {
+            this.json({"cmd": "get_config"});
         }
         
         yb.sendHeartbeat = function ()
@@ -186,9 +197,69 @@ module.exports = function (app) {
                 }
             }
         }
-        
+
+        yb.handleConfig = function (data)
+        {
+            this.config = data;
+
+            let updates = [];
+            let mainPath = this.getMainBoardPath();
+
+            updates.push(this.formatDelta(`${mainPath}/board/version`, data.version));
+            updates.push(this.formatDelta(`${mainPath}/board/name`, data.name));
+            updates.push(this.formatDelta(`${mainPath}/board/uuid`, data.uuid));
+
+            for (channel of data.channels)
+            {
+                let channelPath = `${mainPath}/channel/${channel.id}`;
+                for (const [key, value] of Object.entries(channel)) {
+                    updates.push(this.formatDelta(`${channelPath}/${key}`, value));
+                }
+            }
+
+            this.sendDeltas(updates);
+        }
+
         yb.handleUpdate = function (data)
         {
+            let updates = [];
+            let mainPath = this.getMainBoardPath();
+
+            updates.push(this.formatDelta(`${mainPath}/board/busVoltage`, data.bus_voltage));
+
+            for (channel of data.channels)
+            {
+                let channelPath = `${mainPath}/channel/${channel.id}`;
+
+                updates.push(this.formatDelta(`${channelPath}/state`, channel.state));
+                updates.push(this.formatDelta(`${channelPath}/dutyCycle`, channel.duty));
+                updates.push(this.formatDelta(`${channelPath}/current`, channel.current));
+                updates.push(this.formatDelta(`${channelPath}/aH`, channel.aH));
+                updates.push(this.formatDelta(`${channelPath}/wH`, channel.wH));
+            }
+
+            this.sendDeltas(updates);
+        }
+
+        yb.getMainBoardPath = function (data)
+        {
+            return `electrical/yarrboard/${this.boardname}`;
+        }
+
+        yb.formatDelta = function (path, value)
+        {
+            return { "path": path, "value": value };
+        }
+
+        yb.sendDeltas = function (deltas)
+        {
+            app.handleMessage(plugin.id, {
+                "updates": [
+                    {
+                        "values": deltas
+                    }
+                ]
+            });
         }
     
         return yb;
