@@ -1,0 +1,22 @@
+{
+  "name": "signalk-yarrboard-plugin",
+  "version": "1.0.0",
+  "description": "Plugin for interfacing with Yarrboard",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hoeken/signalk-yarrboard-plugin.git"
+  },
+  "keywords": [
+    "signalk-node-server-plugin"
+  ],
+  "author": "Zach Hoeken",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/hoeken/signalk-yarrboard-plugin/issues"
+  },
+  "homepage": "https://github.com/hoeken/signalk-yarrboard-plugin#readme"
+}
