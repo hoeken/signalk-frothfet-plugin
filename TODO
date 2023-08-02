@@ -1,4 +1,3 @@
 * add metadata to updates
-* respect has current and has duty (firmware side?)
+* respect has current / has duty / isDimmable (firmware side?)
 * add in PUTS for controlling state and duty cycle
-* plugin.stop should kill connections

@@ -24,8 +24,13 @@ module.exports = function (app) {
     };
   
     plugin.stop = function () {
-      // Here we put logic we need when the plugin stops
-      app.debug('Plugin stopped');
+        // Here we put logic we need when the plugin stops
+        app.debug('Plugin stopped');
+
+        //close all our connections
+        for (yb of plugin.connections)
+            yb.close();
+        plugin.connections = [];
     };
   
     plugin.schema = {
@@ -68,6 +73,7 @@ module.exports = function (app) {
     {
         var yb = {};
         yb.config = false;
+        yb.closed = false;
 
         yb.hostname = hostname;
         yb.username = username;
@@ -145,12 +151,21 @@ module.exports = function (app) {
             }
         }
 
+        yb.close = function () {
+            this.closed = true;
+            this.ws.close();
+        }
+
         yb.getConfig = function () {
             this.json({"cmd": "get_config"});
         }
         
         yb.sendHeartbeat = function ()
         {
+            //bail if we're done.
+            if (this.closed)
+                return;
+
             //did we not get a heartbeat?
             if (Date.now() - this.last_heartbeat > 1000 * 2)
             {
@@ -179,6 +194,10 @@ module.exports = function (app) {
         
         yb.retryConnection = function ()
         {
+            //bail if we're done.
+            if (this.closed)
+                return;
+        
             //bail if its good to go
             if (this.ws.readyState == W3CWebSocket.OPEN)
                 return;
