@@ -98,15 +98,20 @@ module.exports = function (app) {
         yb.onmessage = function (message)
         {
             if (typeof message.data === 'string') {
-                let data = JSON.parse(message.data);
-                if (data.msg == "update")
-                    this.handleUpdate(data);
-                else if (data.msg == "config")
-                    this.handleConfig(data);
-                else if (data.pong)
-                    this.last_heartbeat = Date.now();
-                else
-                    app.debug(data);
+                try {
+                    let data = JSON.parse(message.data);
+                    if (data.msg == "update")
+                        this.handleUpdate(data);
+                    else if (data.msg == "config")
+                        this.handleConfig(data);
+                    else if (data.pong)
+                        this.last_heartbeat = Date.now();
+                    else
+                        app.debug(data);    
+                } catch (error) {
+                    app.debug(`[${this.hostname}] Message error: ${error}`);
+                    //app.debug(message);
+                }
             }
         }
 
@@ -192,7 +197,7 @@ module.exports = function (app) {
                     //console.log(message.cmd);
                     this.ws.send(JSON.stringify(message));
                 } catch (error) {
-                    app.debug("Send: " + error);
+                    app.debug(`[${this.hostname}] Send error: ${error}`);
                 }
             }
         }
