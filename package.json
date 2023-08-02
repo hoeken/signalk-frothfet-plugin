@@ -11,12 +11,16 @@
     "url": "git+https://github.com/hoeken/signalk-yarrboard-plugin.git"
   },
   "keywords": [
-    "signalk-node-server-plugin"
+    "signalk-node-server-plugin",
+    "signalk-category-digital-switching"
   ],
   "author": "Zach Hoeken",
   "license": "ISC",
   "bugs": {
     "url": "https://github.com/hoeken/signalk-yarrboard-plugin/issues"
   },
-  "homepage": "https://github.com/hoeken/signalk-yarrboard-plugin#readme"
+  "homepage": "https://github.com/hoeken/signalk-yarrboard-plugin#readme",
+  "dependencies": {
+    "websocket": "^1.0.34"
+  }
 }
