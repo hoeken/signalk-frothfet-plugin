@@ -277,6 +277,9 @@ module.exports = function (app) {
 
             let mainPath = this.getMainBoardPath();
 
+            app.registerPutHandler('vessels.self', `${mainPath}/control/setState`, this.doSetState.bind(this));
+            app.registerPutHandler('vessels.self', `${mainPath}/control/setDuty`, this.doSetDuty.bind(this));
+
             //console.log(JSON.stringify(data));
 
             this.queueUpdate(`${mainPath}/board/version`, data.version, "", "Firmware version of the board.");
@@ -294,7 +297,7 @@ module.exports = function (app) {
 
                         if (plugin.channelMetas.hasOwnProperty(key))
                             this.queueMeta(`${channelPath}/${key}`, plugin.channelMetas[key].units, plugin.channelMetas[key].description);
-                    }    
+                    }
                 }
             }
 
@@ -412,6 +415,53 @@ module.exports = function (app) {
         {
             yb.sendDeltas();
             yb.sendMetas();
+        }
+
+        yb.doSetState = function(context, path, value, callback)
+        {
+            let cid = parseInt(value.id);
+            let state = Boolean(value.value);
+
+            if (this.config.channels[cid].enabled)
+            {
+                this.json({
+                    "cmd": "set_state",
+                    "id": cid,
+                    "value": state
+                });
+
+                return { state: 'COMPLETED', statusCode: 200 };
+            }
+            else
+                app.setPluginError(`Channel ${cid} not enabled`)
+
+            return { state: 'COMPLETED', statusCode: 400 };
+        }
+
+        yb.doSetDuty = function(context, path, value, callback)
+        {
+            let cid = parseInt(value.id);
+            let duty = parseFloat(value.value);
+
+            if (this.config.channels[cid].enabled)
+            {
+                if (this.config.channels[cid].isDimmable)
+                {
+                    this.json({
+                        "cmd": "set_duty",
+                        "id": cid,
+                        "value": duty
+                    });
+                    
+                    return { state: 'COMPLETED', statusCode: 200 };
+                }
+                else
+                    app.setPluginError(`Channel ${cid} not dimmable`)
+            }
+            else
+                app.setPluginError(`Channel ${cid} not enabled`)
+
+            return { state: 'COMPLETED', statusCode: 400 };
         }
 
         yb.createWebsocket();
