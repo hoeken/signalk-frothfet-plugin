@@ -380,13 +380,19 @@ module.exports = function (app) {
                 }]
             });
 
+            //for (delta of this.deltas)
+            //    app.handleMessage(plugin.id, {"updates": [{"values": [delta]}]});
+
             this.deltas = [];
         }
 
         yb.sendMetas = function ()
         {
-            if (!this.metas.length)
-                return;
+            //metas is broken for now
+            return;
+
+            //if (!this.metas.length)
+            //    return;
 
             //app.debug('Metas: %s', JSON.stringify(this.metas));
 
