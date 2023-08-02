@@ -354,13 +354,17 @@ module.exports = function (app) {
             //this.metaPaths.push(path);
 
             //add it to our array
-            this.metas.push({
+            let meta = {
                 "path": path,
-                "value": {
-                    "units": units,
-                    "description": description
-                }
-            });
+                "value": {}
+            };
+
+            if (units != "")
+                meta.value.units = units;
+            if (description != "")
+                meta.value.description = description;
+
+            this.metas.push(meta);
         }
 
         yb.sendDeltas = function ()
@@ -391,6 +395,9 @@ module.exports = function (app) {
                     "meta": this.metas
                 }]
             });
+
+            //for (meta of this.metas)
+            //    app.handleMessage(plugin.id, {"updates": [{"meta": [meta]}]});
 
             this.metas = [];
         }
