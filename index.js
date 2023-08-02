@@ -18,6 +18,7 @@ module.exports = function (app) {
 
         for (hostname of hosts)
         {
+            hostname = hostname.trim();
             let yb = plugin.createYarrboard(hostname);
             yb.createWebsocket();
 
@@ -225,17 +226,14 @@ module.exports = function (app) {
             let updates = [];
             let mainPath = this.getMainBoardPath();
 
-            updates.push(this.formatDelta(`${mainPath}/board/busVoltage`, data.bus_voltage));
+            updates.push(this.formatDelta(`${mainPath}/board/bus_voltage`, data.bus_voltage));
 
             for (channel of data.channels)
             {
                 let channelPath = `${mainPath}/channel/${channel.id}`;
-
-                updates.push(this.formatDelta(`${channelPath}/state`, channel.state));
-                updates.push(this.formatDelta(`${channelPath}/dutyCycle`, channel.duty));
-                updates.push(this.formatDelta(`${channelPath}/current`, channel.current));
-                updates.push(this.formatDelta(`${channelPath}/aH`, channel.aH));
-                updates.push(this.formatDelta(`${channelPath}/wH`, channel.wH));
+                for (const [key, value] of Object.entries(channel)) {
+                    updates.push(this.formatDelta(`${channelPath}/${key}`, value));
+                }
             }
 
             this.sendDeltas(updates);
