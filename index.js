@@ -277,26 +277,27 @@ module.exports = function (app) {
 
             let mainPath = this.getMainBoardPath();
 
-            app.registerPutHandler('vessels.self', `${mainPath}/control/setState`, this.doSetState.bind(this));
-            app.registerPutHandler('vessels.self', `${mainPath}/control/setDuty`, this.doSetDuty.bind(this));
+            app.registerPutHandler('vessels.self', `${mainPath}.control.setState`, this.doSetState.bind(this));
+            app.registerPutHandler('vessels.self', `${mainPath}.control.setDuty`, this.doSetDuty.bind(this));
 
             //console.log(JSON.stringify(data));
 
-            this.queueUpdate(`${mainPath}/board/version`, data.version, "", "Firmware version of the board.");
-            this.queueUpdate(`${mainPath}/board/name`, data.name, "", "User defined name of the board.");
-            this.queueUpdate(`${mainPath}/board/uuid`, data.uuid, "", "Unique ID of the board.");
+            this.queueUpdate(`${mainPath}.board.firmware_version`, data.firmware_version, "", "Firmware version of the board.");
+            this.queueUpdate(`${mainPath}.board.hardware_version`, data.hardware_version, "", "Hardware version of the board.");
+            this.queueUpdate(`${mainPath}.board.name`, data.name, "", "User defined name of the board.");
+            this.queueUpdate(`${mainPath}.board.uuid`, data.uuid, "", "Unique ID of the board.");
 
             for (channel of data.channels)
             {
                 if(channel.enabled)
                 {
-                    let channelPath = `${mainPath}/channel/${channel.id}`;
+                    let channelPath = `${mainPath}.channel.${channel.id}`;
                     for (const [key, value] of Object.entries(channel))
                     {
-                        this.queueDelta(`${channelPath}/${key}`, value);
+                        this.queueDelta(`${channelPath}.${key}`, value);
 
                         if (plugin.channelMetas.hasOwnProperty(key))
-                            this.queueMeta(`${channelPath}/${key}`, plugin.channelMetas[key].units, plugin.channelMetas[key].description);
+                            this.queueMeta(`${channelPath}.${key}`, plugin.channelMetas[key].units, plugin.channelMetas[key].description);
                     }
                 }
             }
@@ -313,19 +314,19 @@ module.exports = function (app) {
 
             let mainPath = this.getMainBoardPath();
 
-            this.queueUpdate(`${mainPath}/board/bus_voltage`, data.bus_voltage, 'V', "Bus supply voltage");
+            this.queueUpdate(`${mainPath}.board.bus_voltage`, data.bus_voltage, 'V', "Bus supply voltage");
 
             for (channel of data.channels)
             {
                 if (this.config.channels[channel.id].enabled)
                 {
-                    let channelPath = `${mainPath}/channel/${channel.id}`;
+                    let channelPath = `${mainPath}.channel.${channel.id}`;
                     for (const [key, value] of Object.entries(channel))
                     {
-                        this.queueDelta(`${channelPath}/${key}`, value);
+                        this.queueDelta(`${channelPath}.${key}`, value);
 
                         if (plugin.channelMetas.hasOwnProperty(key))
-                            this.queueMeta(`${channelPath}/${key}`, plugin.channelMetas[key].units, plugin.channelMetas[key].description);
+                            this.queueMeta(`${channelPath}.${key}`, plugin.channelMetas[key].units, plugin.channelMetas[key].description);
                     }
                 }
             }
@@ -335,7 +336,7 @@ module.exports = function (app) {
 
         yb.getMainBoardPath = function (data)
         {
-            return `electrical/yarrboard/${this.config.hostname}`;
+            return `electrical.yarrboard.${this.config.hostname}`;
         }
 
         yb.queueUpdate = function (path, value, units, description)
@@ -352,20 +353,18 @@ module.exports = function (app) {
         yb.queueMeta = function (path, units, description)
         {
             //only send it once
-            //if (this.metaPaths.includes(path))
-            //    return;
-            //this.metaPaths.push(path);
+            if (this.metaPaths.includes(path))
+                return;
+            this.metaPaths.push(path);
 
             //add it to our array
             let meta = {
                 "path": path,
-                "value": {}
+                "value": {
+                    "units": units,
+                    "description": description
+                }
             };
-
-            if (units != "")
-                meta.value.units = units;
-            if (description != "")
-                meta.value.description = description;
 
             this.metas.push(meta);
         }
@@ -383,30 +382,21 @@ module.exports = function (app) {
                 }]
             });
 
-            //for (delta of this.deltas)
-            //    app.handleMessage(plugin.id, {"updates": [{"values": [delta]}]});
-
             this.deltas = [];
         }
 
         yb.sendMetas = function ()
         {
-            //metas is broken for now
-            return;
+            if (!this.metas.length)
+                return;
 
-            //if (!this.metas.length)
-            //    return;
-
-            //app.debug('Metas: %s', JSON.stringify(this.metas));
-
-            app.handleMessage(plugin.id, {
+            let update = {
                 "updates": [{ 
                     "meta": this.metas
                 }]
-            });
+            };
 
-            //for (meta of this.metas)
-            //    app.handleMessage(plugin.id, {"updates": [{"meta": [meta]}]});
+            app.handleMessage(plugin.id, update);
 
             this.metas = [];
         }
