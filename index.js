@@ -152,6 +152,8 @@ module.exports = function (app) {
                         this.handleConfig(data);
                     else if (data.pong)
                         this.last_heartbeat = Date.now();
+                    else if (data.ok)
+                        return;
                     else if (data.error)
                     {
                         app.debug(`[${this.hostname}] Error: ${data.error}`);
