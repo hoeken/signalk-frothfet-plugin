@@ -279,8 +279,7 @@ module.exports = function (app) {
 
             let mainPath = this.getMainBoardPath();
 
-            app.registerPutHandler('vessels.self', `${mainPath}.control.setState`, this.doSetState.bind(this));
-            app.registerPutHandler('vessels.self', `${mainPath}.control.setDuty`, this.doSetDuty.bind(this));
+            app.registerPutHandler('vessels.self', `${mainPath}.control`, this.doSendJSON.bind(this));
 
             //console.log(JSON.stringify(data));
 
@@ -409,51 +408,11 @@ module.exports = function (app) {
             yb.sendMetas();
         }
 
-        yb.doSetState = function(context, path, value, callback)
+        yb.doSendJSON = function(context, path, value, callback)
         {
-            let cid = parseInt(value.id);
-            let state = Boolean(value.value);
+            this.json(value);
 
-            if (this.config.channels[cid].enabled)
-            {
-                this.json({
-                    "cmd": "set_channel",
-                    "id": cid,
-                    "state": state
-                });
-
-                return { state: 'COMPLETED', statusCode: 200 };
-            }
-            else
-                app.setPluginError(`Channel ${cid} not enabled`)
-
-            return { state: 'COMPLETED', statusCode: 400 };
-        }
-
-        yb.doSetDuty = function(context, path, value, callback)
-        {
-            let cid = parseInt(value.id);
-            let duty = parseFloat(value.value);
-
-            if (this.config.channels[cid].enabled)
-            {
-                if (this.config.channels[cid].isDimmable)
-                {
-                    this.json({
-                        "cmd": "set_channel",
-                        "id": cid,
-                        "duty": duty
-                    });
-                    
-                    return { state: 'COMPLETED', statusCode: 200 };
-                }
-                else
-                    app.setPluginError(`Channel ${cid} not dimmable`)
-            }
-            else
-                app.setPluginError(`Channel ${cid} not enabled`)
-
-            return { state: 'COMPLETED', statusCode: 400 };
+            return { state: 'COMPLETED', statusCode: 200 };
         }
 
         yb.createWebsocket();
