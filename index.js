@@ -415,9 +415,9 @@ module.exports = function (app) {
             if (this.config.channels[cid].enabled)
             {
                 this.json({
-                    "cmd": "set_state",
+                    "cmd": "set_channel",
                     "id": cid,
-                    "value": state
+                    "state": state
                 });
 
                 return { state: 'COMPLETED', statusCode: 200 };
@@ -438,9 +438,9 @@ module.exports = function (app) {
                 if (this.config.channels[cid].isDimmable)
                 {
                     this.json({
-                        "cmd": "set_duty",
+                        "cmd": "set_channel",
                         "id": cid,
-                        "value": duty
+                        "duty": duty
                     });
                     
                     return { state: 'COMPLETED', statusCode: 200 };
