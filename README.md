@@ -15,4 +15,6 @@ SignalK path formats are as below:
 
 The plugin also provides PUT endpoints on the following paths:
 
-* electrical.yarrboard.{boardname}.control - passes raw json to the websocket, but does not return any response. See the <a href="https://github.com/hoeken/yarrboard#protocol">protocol documentation</a> for more information on format.  Login and auth will already be handled for you by SignalK.
+* electrical.yarrboard.{boardname}.control - passes raw json to the websocket, but does not return any response.
+
+See the <a href="https://github.com/hoeken/yarrboard#protocol">protocol documentation</a> for more information on format.  Login and auth will already be handled for you by SignalK.
