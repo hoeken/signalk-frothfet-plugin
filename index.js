@@ -146,26 +146,27 @@ module.exports = function (app) {
             if (typeof message.data === 'string') {
                 try {
                     let data = JSON.parse(message.data);
+
+                    this.last_heartbeat = Date.now();
+
                     if (data.msg == "update")
                         this.handleUpdate(data);
                     else if (data.msg == "config")
                         this.handleConfig(data);
-                    else if (data.pong)
-                        this.last_heartbeat = Date.now();
-                    else if (data.ok)
-                        return;
-                    else if (data.error)
+                    else if (data.pong) //this is our heartbeat reply
+                        true;
+                    else if (data.status == "error")
                     {
-                        app.debug(`[${this.hostname}] Error: ${data.error}`);
-                        app.setPluginError(`[${this.hostname}] ${data.error}`);
+                        app.debug(`[${this.hostname}] Error: ${data.message}`);
+                        app.setPluginError(`[${this.hostname}] ${data.message}`);
                     }
-                    else if (data.success)
+                    else if (data.status == "success")
                     {
-                        app.debug(`[${this.hostname}] Success: ${data.success}`);
-                        app.setPluginStatus(`[${this.hostname}] ${data.success}`);
+                        app.debug(`[${this.hostname}] Success: ${data.message}`);
+                        app.setPluginStatus(`[${this.hostname}] ${data.message}`);
                     }
                     else
-                        app.debug(data);    
+                        app.debug(`[${this.hostname}] ` + JSON.stringify(data));    
                 } catch (error) {
                     app.debug(`[${this.hostname}] Message error: ${error}`);
                     //app.debug(message);
