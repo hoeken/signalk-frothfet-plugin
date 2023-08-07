@@ -1,4 +1,4 @@
-var W3CWebSocket = require('websocket').w3cwebsocket;
+const YarrboardClient = require('yarrboard-client');
 
 module.exports = function (app) {
     var plugin = {};
@@ -87,190 +87,24 @@ module.exports = function (app) {
 
     plugin.createYarrboard = function(hostname, username="admin", password="admin", require_login = false)
     {
-        var yb = {};
-        yb.config = false;
-        yb.closed = false;
+        var yb = new YarrboardClient(hostname, username, password, require_login);
 
         yb.metaPaths = [];
         yb.metas = [];
         yb.deltas = [];
-
-        yb.hostname = hostname;
-        yb.username = username;
-        yb.password = password;
-        yb.require_login = require_login;
-
-        yb.boardname = hostname.split(".")[0];
-
-        yb.createWebsocket = function ()
+        
+        yb.onmessage = function (data)
         {
-            var ws = new W3CWebSocket(`ws://${this.hostname}/ws`);
-            ws.onopen = this.onopen.bind(this);
-            ws.onerror = this.onerror.bind(this);
-            ws.onclose = this.onclose.bind(this);
-            ws.onmessage = this.onmessage.bind(this);
-
-            this.ws = ws;
-        }
-        
-        yb.onerror = function ()
-        {
-            app.debug(`[${this.hostname}] Connection error`);
-        };
-        
-        yb.onopen = function ()
-        {
-            app.debug(`[${this.hostname}] Connected`);
-        
-            //we are connected, reload
-            this.socket_retries = 0;
-            this.retry_time = 0;
-            this.last_heartbeat = Date.now();
-        
-            //our connection watcher
-            setTimeout(this.sendHeartbeat.bind(this), 1000);
-
-            //load our config
-            setTimeout(this.getConfig.bind(this), 50);
-        
-            if (this.require_login)
-                this.doLogin("admin", "admin");
-        };
-        
-        yb.onclose = function () {
-            app.debug(`[${this.hostname}] Connection closed`);
-        };
-        
-        yb.onmessage = function (message)
-        {
-            if (typeof message.data === 'string') {
-                try {
-                    let data = JSON.parse(message.data);
-
-                    this.last_heartbeat = Date.now();
-
-                    if (data.msg == "update")
-                        this.handleUpdate(data);
-                    else if (data.msg == "config")
-                        this.handleConfig(data);
-                    else if (data.pong) //this is our heartbeat reply
-                        true;
-                    else if (data.status == "error")
-                    {
-                        app.debug(`[${this.hostname}] Error: ${data.message}`);
-                        app.setPluginError(`[${this.hostname}] ${data.message}`);
-                    }
-                    else if (data.status == "success")
-                    {
-                        app.debug(`[${this.hostname}] Success: ${data.message}`);
-                        app.setPluginStatus(`[${this.hostname}] ${data.message}`);
-                    }
-                    else
-                        app.debug(`[${this.hostname}] ` + JSON.stringify(data));    
-                } catch (error) {
-                    app.debug(`[${this.hostname}] Message error: ${error}`);
-                    //app.debug(message);
-                }
-            }
-        }
-
-        yb.close = function () {
-            this.closed = true;
-            this.ws.close();
-        }
-
-        yb.getConfig = function () {
-            this.json({"cmd": "get_config"});
-        }
-        
-        yb.sendHeartbeat = function ()
-        {
-            //bail if we're done.
-            if (this.closed)
-                return;
-
-            //did we not get a heartbeat?
-            if (Date.now() - this.last_heartbeat > 1000 * 2)
+            if (data.msg == "update")
+                this.handleUpdate(data);
+            else if (data.msg == "config")
+                this.handleConfig(data);
+            else if (data.msg = "status")
             {
-                app.debug(`[${this.hostname}] Missed heartbeat`)
-                this.ws.close();
-                this.retryConnection();
-            }
-        
-            //only send it if we're already open.
-            if (this.ws.readyState == W3CWebSocket.OPEN)
-            {
-                this.json({"cmd": "ping"});
-                setTimeout(this.sendHeartbeat.bind(this), 1000);
-            }
-            else if (this.ws.readyState == W3CWebSocket.CLOSING)
-            {
-                app.debug(`[${this.hostname}] closing`);
-                this.retryConnection();
-            }
-            else if (this.ws.readyState == W3CWebSocket.CLOSED)
-            {
-                app.debug(`[${this.hostname}] closed`);
-                this.retryConnection();
-            }
-        }
-        
-        yb.retryConnection = function ()
-        {
-            //bail if we're done.
-            if (this.closed)
-                return;
-        
-            //bail if its good to go
-            if (this.ws.readyState == W3CWebSocket.OPEN)
-                return;
-        
-            //keep watching if we are connecting
-            if (this.ws.readyState == W3CWebSocket.CONNECTING)
-            {
-                this.retry_time++;
-        
-                //tee it up.
-                setTimeout(this.retryConnection.bind(this), 1000);
-        
-                return;
-            }
-        
-            //keep track of stuff.
-            this.retry_time = 0;
-            this.socket_retries++;
-            app.debug(`[${this.hostname}] Reconnecting... ${this.socket_retries}`);
-        
-            //reconnect!
-            this.createWebsocket();
-        
-            //set some bounds
-            let my_timeout = 500;
-            my_timeout = Math.max(my_timeout, this.socket_retries * 1000);
-            my_timeout = Math.min(my_timeout, 60000);
-        
-            //tee it up.
-            setTimeout(this.retryConnection.bind(this), my_timeout);
-        }
-        
-        yb.doLogin = function (username, password)
-        {
-            this.json({
-                "cmd": "login",
-                "user": username,
-                "pass": password
-            });
-        }
-        
-        yb.json = function (message)
-        {
-            if (this.ws.readyState == W3CWebSocket.OPEN) {
-                try {
-                    //app.debug(message.cmd);
-                    this.ws.send(JSON.stringify(message));
-                } catch (error) {
-                    app.debug(`[${this.hostname}] Send error: ${error}`);
-                }
+                if (data.status == "error")
+                    app.setPluginError(`[${this.hostname}] ${data.message}`);
+                else if (data.status == "success")
+                    app.setPluginStatus(`[${this.hostname}] ${data.message}`);
             }
         }
 
@@ -416,7 +250,7 @@ module.exports = function (app) {
             return { state: 'COMPLETED', statusCode: 200 };
         }
 
-        yb.createWebsocket();
+        yb.start();
     
         return yb;
     }
