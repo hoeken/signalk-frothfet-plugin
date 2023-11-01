@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>SignalK Yarrboard</title>
+    <script src="jquery-3.7.1.min.js"></script>
+    <script src="bootstrap.min.js"></script>
+    <link rel="stylesheet" type="text/css" href="bootstrap.min.css">
+</head>
+<body>
+<h1 class="text-center">Yarrboard Boards</h1>
+<div id="yarrboard_container"></div>
+<script>
+	let yb  = $("#yarrboard_container");
+	$.get('/signalk/v1/api/vessels/self/electrical/yarrboard/', function (data) {
+		if (Object.entries(data))
+		{
+			for (const [host, value] of Object.entries(data))
+			{
+				let board = value.board;
+				console.log(board);
+				yb.append(`<h2 class="text-center"><a href="http://${board.hostname.value}">${board.name.value}</a></h2>\n`);
+				yb.append(`<iframe src="http://${board.hostname.value}" width="100%" height="500" frameBorder="0" style="border: 1px solid #000"></iframe>`);
+			}
+		}
+		else
+			yb.html("<b>No boards found.</b>");
+	});
+</script>
+</body>
+</html>

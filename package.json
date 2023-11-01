@@ -1,6 +1,6 @@
 {
   "name": "signalk-yarrboard-plugin",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Plugin for interfacing with Yarrboard",
   "main": "index.js",
   "scripts": {
@@ -12,8 +12,13 @@
   },
   "keywords": [
     "signalk-node-server-plugin",
-    "signalk-category-digital-switching"
+    "signalk-category-digital-switching",
+    "signalk-webapp"
   ],
+  "signalk": {
+    "appIcon": "logo.png",
+    "displayName": "Yarrboard"
+  },
   "author": "Zach Hoeken",
   "license": "ISC",
   "bugs": {

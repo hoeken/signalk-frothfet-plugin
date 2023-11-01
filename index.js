@@ -227,6 +227,7 @@ module.exports = function (app) {
             this.queueUpdate(`${mainPath}.board.hardware_version`, data.hardware_version, "", "Hardware version of the board.");
             this.queueUpdate(`${mainPath}.board.name`, data.name, "", "User defined name of the board.");
             this.queueUpdate(`${mainPath}.board.uuid`, data.uuid, "", "Unique ID of the board.");
+            this.queueUpdate(`${mainPath}.board.hostname`, data.hostname + ".local", "", "Hostname of the board");
             this.queueMeta(`${mainPath}.board.uptime`, "S", "Seconds since the last reboot");
 
             //some boards don't have this.
