@@ -58,7 +58,7 @@ module.exports = function (app) {
         {
             //app.debug('Board: %s', JSON.stringify(board));
 
-            let yb = plugin.createYarrboard(board.host.trim(), board.username, board.password, board.require_login);
+            let yb = plugin.createYarrboard(board.host.trim(), board.username, board.password, board.require_login, board.use_ssl);
             plugin.connections.push(yb);
         }
     };
@@ -93,6 +93,11 @@ module.exports = function (app) {
                             title: 'Login required?',
                             default: false,
                         },
+                        use_ssl: {
+                            type: 'boolean',
+                            title: 'Use SSL / HTTPS?',
+                            default: false,
+                        },
                         username: {
                             type: 'string',
                             title: 'Username',
@@ -109,9 +114,9 @@ module.exports = function (app) {
         }
     };
 
-    plugin.createYarrboard = function(hostname, username="admin", password="admin", require_login = false)
+    plugin.createYarrboard = function(hostname, username="admin", password="admin", require_login = false, use_ssl = false)
     {
-        var yb = new YarrboardClient(hostname, username, password, require_login);
+        var yb = new YarrboardClient(hostname, username, password, require_login, use_ssl);
 
         yb.metaPaths = [];
         yb.metas = [];
@@ -228,6 +233,7 @@ module.exports = function (app) {
             this.queueUpdate(`${mainPath}.board.name`, data.name, "", "User defined name of the board.");
             this.queueUpdate(`${mainPath}.board.uuid`, data.uuid, "", "Unique ID of the board.");
             this.queueUpdate(`${mainPath}.board.hostname`, data.hostname + ".local", "", "Hostname of the board");
+            this.queueUpdate(`${mainPath}.board.use_ssl`, data.use_ssl, "", "Whether the app uses SSL or not");
             this.queueMeta(`${mainPath}.board.uptime`, "S", "Seconds since the last reboot");
 
             //some boards don't have this.
