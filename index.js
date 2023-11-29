@@ -60,6 +60,9 @@ module.exports = function (app) {
 
             let yb = plugin.createYarrboard(board.host.trim(), board.username, board.password, board.require_login, board.use_ssl);
             plugin.connections.push(yb);
+
+            //we need to poll for our updates
+            setInterval(yb.getUpdate.bind(yb), board.update_interval);
         }
     };
   
@@ -87,6 +90,11 @@ module.exports = function (app) {
                             type: 'string',
                             title: 'Yarrboard hostname or IP',
                             default: 'yarrboard.local'
+                        },
+                        update_interval: {
+                            type: 'number',
+                            title: 'Update interval (ms)',
+                            default: 1000
                         },
                         require_login: {
                             type: 'boolean',
@@ -121,7 +129,7 @@ module.exports = function (app) {
         yb.metaPaths = [];
         yb.metas = [];
         yb.deltas = [];
-        
+
         yb.onmessage = function (data)
         {
             if (data.msg == "update")
@@ -349,6 +357,11 @@ module.exports = function (app) {
             this.json(value);
 
             return { state: 'COMPLETED', statusCode: 200 };
+        }
+
+        yb.getUpdate = function()
+        {
+            this.json({"cmd": "get_stats"});
         }
 
         yb.start();

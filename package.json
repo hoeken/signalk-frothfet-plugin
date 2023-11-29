@@ -27,6 +27,6 @@
   "homepage": "https://github.com/hoeken/signalk-yarrboard-plugin#readme",
   "dependencies": {
     "websocket": "^1.0.34",
-    "yarrboard-client": "^1.0.1"
+    "yarrboard-client": "^1.2.1"
   }
 }
