@@ -61,11 +61,10 @@ module.exports = function (app) {
 
             let yb = plugin.createYarrboard(board.host.trim(), board.username, board.password, board.require_login, board.use_ssl);
 
-            yb.onopen = function () 
-            {
-              yb.getConfig();
-              setInterval(yb.getUpdate.bind(yb), board.update_interval);
-            };
+            yb.onopen = function (event) {
+                yb.getConfig();
+                yb.startUpdatePoller(board.update_interval);
+            }
             
             yb.start();            
 
@@ -136,10 +135,6 @@ module.exports = function (app) {
         yb.metaPaths = [];
         yb.metas = [];
         yb.deltas = [];
-
-        yb.onopen = function (event) {
-            yb.getConfig();
-        }
 
         yb.onmessage = function (data)
         {
@@ -365,7 +360,7 @@ module.exports = function (app) {
 
         yb.doSendJSON = function(context, path, value, callback)
         {
-            this.send(value);
+            this.send(value, true);
 
             return { state: 'COMPLETED', statusCode: 200 };
         }
