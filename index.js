@@ -60,10 +60,16 @@ module.exports = function (app) {
             //app.debug('Board: %s', JSON.stringify(board));
 
             let yb = plugin.createYarrboard(board.host.trim(), board.username, board.password, board.require_login, board.use_ssl);
-            plugin.connections.push(yb);
 
-            //we need to poll for our updates
-            setInterval(yb.getUpdate.bind(yb), board.update_interval);
+            yb.onopen = function () 
+            {
+              yb.getConfig();
+              setInterval(yb.getUpdate.bind(yb), board.update_interval);
+            };
+            
+            yb.start();            
+
+            plugin.connections.push(yb);
         }
     };
   
@@ -363,8 +369,6 @@ module.exports = function (app) {
 
             return { state: 'COMPLETED', statusCode: 200 };
         }
-
-        yb.start();
     
         return yb;
     }
