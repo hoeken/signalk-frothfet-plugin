@@ -51,7 +51,8 @@ module.exports = function (app) {
 
     plugin.start = function (options, restartPlugin) {
         // Here we put our plugin logic
-        app.debug('Plugin started');
+        app.debug('Plugin started2');
+        app.debug(YarrboardClient.version);
         //app.debug('Schema: %s', JSON.stringify(options));
 
         for (board of options.config)
@@ -129,6 +130,10 @@ module.exports = function (app) {
         yb.metaPaths = [];
         yb.metas = [];
         yb.deltas = [];
+
+        yb.onopen = function (event) {
+            yb.getConfig();
+        }
 
         yb.onmessage = function (data)
         {
@@ -354,14 +359,9 @@ module.exports = function (app) {
 
         yb.doSendJSON = function(context, path, value, callback)
         {
-            this.json(value);
+            this.send(value);
 
             return { state: 'COMPLETED', statusCode: 200 };
-        }
-
-        yb.getUpdate = function()
-        {
-            this.json({"cmd": "get_stats"});
         }
 
         yb.start();
