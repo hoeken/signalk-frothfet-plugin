@@ -28,7 +28,8 @@ module.exports = function (app) {
         "id": {"units": "", "description": "ID of each switch."},
         "name": {"units": "", "description": "User defined name of switch."},
         "enabled": {"units": "", "description": "Whether or not this switch is in use or should be ignored."},
-        "isOpen": {"units": "", "description": "Whether the switch is open or closed"},
+        "raw": {"units": "", "description": "Raw HIGH/LOW signal of the switch"},
+        "state": {"units": "", "description": "State of the switch output"},
     }
 
     plugin.adcMetas = {
