@@ -3,57 +3,57 @@ const YarrboardClient = require('yarrboard-client');
 module.exports = function (app) {
     var plugin = {};
   
-    plugin.id = 'signalk-yarrboard-plugin';
-    plugin.name = 'Yarrboard';
-    plugin.description = 'Plugin for interfacing with Yarrboard';
+    plugin.id = 'signalk-frothfet-plugin';
+    plugin.name = 'Frothfet';
+    plugin.description = 'Plugin for interfacing with Frothfet boards';
     
     plugin.connections = [];
 
     plugin.pwmMetas = {
         "id": {"units": "", "description": "ID of each channel."},
         "name": {"units": "", "description": "User defined name of channel."},
+        "source": {"units": "", "description": "Source of last state change"},
         "enabled": {"units": "", "description": "Whether or not this channel is in use or should be ignored."},
         "hasPWM": {"units": "", "description": "Whether this channel hardware is capable of PWM (duty cycle, dimming, etc)"},
         "hasCurrent": {"units": "", "description": "Whether this channel has current monitoring."},
         "softFuse": {"units": "A", "description": "Software defined fuse, in amps."},
         "isDimmable": {"units": "", "description": "Whether the channel has dimming enabled or not."},
         "state": {"units": "", "description": "Whether the channel is on or not."},
-        "duty": {"units": "%", "description": "Duty cycle as a ratio from 0 to 1"},
-        "current": {"units": "A", "description": "Current in amps"},
+        "duty": {"units": "ratio", "description": "Duty cycle as a ratio from 0 to 1"},
+        "voltage": {"units": "V", "description": "Voltage of channel"},
+        "current": {"units": "A", "description": "Current of channel"},
         "aH": {"units": "aH", "description": "Consumed amp hours since board restart"},
         "wH": {"units": "wH", "description": "Consumed watt hours since board restart"},
     }
 
-    plugin.switchMetas = {
-        "id": {"units": "", "description": "ID of each switch."},
-        "name": {"units": "", "description": "User defined name of switch."},
-        "enabled": {"units": "", "description": "Whether or not this switch is in use or should be ignored."},
-        "raw": {"units": "", "description": "Raw HIGH/LOW signal of the switch"},
-        "state": {"units": "", "description": "State of the switch output"},
-    }
-
-    plugin.adcMetas = {
-        "id": {"units": "", "description": "ID of each switch."},
-        "name": {"units": "", "description": "User defined name of switch."},
-        "enabled": {"units": "", "description": "Whether or not this switch is in use or should be ignored."},
-        "reading": {"units": "", "description": "The raw reading from the ADC chip"},
-        "voltage": {"units": "V", "description": "Voltage reading at the ADC chip"},
-        "percentage": {"units": "%", "description": "Percentage along the ADC chip range"},
-    }
-
-    plugin.rgbMetas = {
-        "id": {"units": "", "description": "ID of each switch."},
-        "name": {"units": "", "description": "User defined name of switch."},
-        "enabled": {"units": "", "description": "Whether or not this switch is in use or should be ignored."},
-        "red": {"units": "", "description": "Red LED brightness on a scale of 0 to 1"},
-        "green": {"units": "", "description": "Green LED brightness on a scale of 0 to 1"},
-        "blue": {"units": "", "description": "Blue LED brightness on a scale of 0 to 1"},
-    }
+    // plugin.switchMetas = {
+    //     "id": {"units": "", "description": "ID of each switch."},
+    //     "name": {"units": "", "description": "User defined name of switch."},
+    //     "enabled": {"units": "", "description": "Whether or not this switch is in use or should be ignored."},
+    //     "raw": {"units": "", "description": "Raw HIGH/LOW signal of the switch"},
+    //     "state": {"units": "", "description": "State of the switch output"},
+    // }
+    //
+    // plugin.adcMetas = {
+    //     "id": {"units": "", "description": "ID of each switch."},
+    //     "name": {"units": "", "description": "User defined name of switch."},
+    //     "enabled": {"units": "", "description": "Whether or not this switch is in use or should be ignored."},
+    //     "reading": {"units": "", "description": "The raw reading from the ADC chip"},
+    //     "voltage": {"units": "V", "description": "Voltage reading at the ADC chip"},
+    //     "percentage": {"units": "ratio", "description": "Percentage along the ADC chip range"},
+    // }
+    //
+    // plugin.rgbMetas = {
+    //     "id": {"units": "", "description": "ID of each switch."},
+    //     "name": {"units": "", "description": "User defined name of switch."},
+    //     "enabled": {"units": "", "description": "Whether or not this switch is in use or should be ignored."},
+    //     "red": {"units": "", "description": "Red LED brightness on a scale of 0 to 1"},
+    //     "green": {"units": "", "description": "Green LED brightness on a scale of 0 to 1"},
+    //     "blue": {"units": "", "description": "Blue LED brightness on a scale of 0 to 1"},
+    // }
 
     plugin.start = function (options, restartPlugin) {
-        // Here we put our plugin logic
-        app.debug('Plugin started2');
-        app.debug(YarrboardClient.version);
+        app.debug(`YarrboardClient.version: ${YarrboardClient.version}`);
         //app.debug('Schema: %s', JSON.stringify(options));
 
         for (board of options.config)
@@ -84,7 +84,7 @@ module.exports = function (app) {
     };
   
     plugin.schema = {
-        title: "Yarrboard",
+        title: "Frothfet",
         type: "object",
         properties: {
             config: {
@@ -95,8 +95,8 @@ module.exports = function (app) {
                     properties: {
                         host: {
                             type: 'string',
-                            title: 'Yarrboard hostname or IP',
-                            default: 'yarrboard.local'
+                            title: 'Frothfet hostname or IP',
+                            default: 'frothfet.local'
                         },
                         update_interval: {
                             type: 'number',
@@ -175,62 +175,62 @@ module.exports = function (app) {
                 }    
             }
 
-            //switch channels?
-            if (data.switches)
-            {
-                for (ch of data.switches)
-                {
-                    if(this.config.switches[ch.id].enabled)
-                    {
-                        let chPath = `${mainPath}.switches.${ch.id}`;
-                        for (const [key, value] of Object.entries(ch))
-                        {
-                            this.queueDelta(`${chPath}.${key}`, value);
-
-                            if (plugin.switchMetas.hasOwnProperty(key))
-                                this.queueMeta(`${chPath}.${key}`, plugin.switchMetas[key].units, plugin.switchMetas[key].description);
-                        }
-                    }
-                }    
-            }
-
-            //adc channels?
-            if (data.adc)
-            {
-                for (ch of data.adc)
-                {
-                    if (this.config.adc[ch.id].enabled)
-                    {
-                        let chPath = `${mainPath}.adc.${ch.id}`;
-                        for (const [key, value] of Object.entries(ch))
-                        {
-                            this.queueDelta(`${chPath}.${key}`, value);
-
-                            if (plugin.adcMetas.hasOwnProperty(key))
-                                this.queueMeta(`${chPath}.${key}`, plugin.adcMetas[key].units, plugin.adcMetas[key].description);
-                        }
-                    }
-                }    
-            }
-
-            //rgb channels?
-            if (data.rgb)
-            {
-                for (ch of data.rgb)
-                {
-                    if (this.config.rgb[ch.id].enabled)
-                    {
-                        let chPath = `${mainPath}.rgb.${ch.id}`;
-                        for (const [key, value] of Object.entries(ch))
-                        {
-                            this.queueDelta(`${chPath}.${key}`, value);
-
-                            if (plugin.rgbMetas.hasOwnProperty(key))
-                                this.queueMeta(`${chPath}.${key}`, plugin.rgbMetas[key].units, plugin.rgbMetas[key].description);
-                        }
-                    }
-                }    
-            }
+            // //switch channels?
+            // if (data.switches)
+            // {
+            //     for (ch of data.switches)
+            //     {
+            //         if(this.config.switches[ch.id].enabled)
+            //         {
+            //             let chPath = `${mainPath}.switches.${ch.id}`;
+            //             for (const [key, value] of Object.entries(ch))
+            //             {
+            //                 this.queueDelta(`${chPath}.${key}`, value);
+            //
+            //                 if (plugin.switchMetas.hasOwnProperty(key))
+            //                     this.queueMeta(`${chPath}.${key}`, plugin.switchMetas[key].units, plugin.switchMetas[key].description);
+            //             }
+            //         }
+            //     }
+            // }
+            //
+            // //adc channels?
+            // if (data.adc)
+            // {
+            //     for (ch of data.adc)
+            //     {
+            //         if (this.config.adc[ch.id].enabled)
+            //         {
+            //             let chPath = `${mainPath}.adc.${ch.id}`;
+            //             for (const [key, value] of Object.entries(ch))
+            //             {
+            //                 this.queueDelta(`${chPath}.${key}`, value);
+            //
+            //                 if (plugin.adcMetas.hasOwnProperty(key))
+            //                     this.queueMeta(`${chPath}.${key}`, plugin.adcMetas[key].units, plugin.adcMetas[key].description);
+            //             }
+            //         }
+            //     }
+            // }
+            //
+            // //rgb channels?
+            // if (data.rgb)
+            // {
+            //     for (ch of data.rgb)
+            //     {
+            //         if (this.config.rgb[ch.id].enabled)
+            //         {
+            //             let chPath = `${mainPath}.rgb.${ch.id}`;
+            //             for (const [key, value] of Object.entries(ch))
+            //             {
+            //                 this.queueDelta(`${chPath}.${key}`, value);
+            //
+            //                 if (plugin.rgbMetas.hasOwnProperty(key))
+            //                     this.queueMeta(`${chPath}.${key}`, plugin.rgbMetas[key].units, plugin.rgbMetas[key].description);
+            //             }
+            //         }
+            //     }
+            // }
         }
 
         yb.handleConfig = function (data)
@@ -249,11 +249,6 @@ module.exports = function (app) {
             this.queueUpdate(`${mainPath}.board.uuid`, data.uuid, "", "Unique ID of the board.");
             this.queueUpdate(`${mainPath}.board.hostname`, data.hostname + ".local", "", "Hostname of the board");
             this.queueUpdate(`${mainPath}.board.use_ssl`, data.use_ssl, "", "Whether the app uses SSL or not");
-            this.queueMeta(`${mainPath}.board.uptime`, "S", "Seconds since the last reboot");
-
-            //some boards don't have this.
-            if (data.bus_voltage)
-                this.queueMeta(`${mainPath}.board.uuid`, "V", "Supply voltage to the board.");
 
             //common handler for config and update
             this.queueDeltasAndUpdates(data);
@@ -277,7 +272,7 @@ module.exports = function (app) {
 
             //store our uptime
             if (data.uptime)
-                this.queueUpdate(`${mainPath}.board.uptime`, data.uptime, "S", "Uptime since the last reboot");
+                this.queueUpdate(`${mainPath}.board.uptime`, data.uptime / 1000000, "s", "Uptime since the last reboot");
 
             //common handler for config and update
             this.queueDeltasAndUpdates(data);
@@ -288,7 +283,7 @@ module.exports = function (app) {
 
         yb.getMainBoardPath = function (data)
         {
-            return `electrical.yarrboard.${this.config.hostname}`;
+            return `electrical.frothfet.${this.config.hostname}`;
         }
 
         yb.queueUpdate = function (path, value, units, description)

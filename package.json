@@ -1,14 +1,14 @@
 {
-  "name": "signalk-yarrboard-plugin",
-  "version": "1.3.0",
-  "description": "Plugin for interfacing with Yarrboard",
+  "name": "signalk-frothfet-plugin",
+  "version": "1.4.0",
+  "description": "Plugin for interfacing with Frothfet boards",
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/hoeken/signalk-yarrboard-plugin.git"
+    "url": "git+https://github.com/hoeken/signalk-frothfet-plugin.git"
   },
   "keywords": [
     "signalk-node-server-plugin",
@@ -17,14 +17,14 @@
   ],
   "signalk": {
     "appIcon": "logo.png",
-    "displayName": "Yarrboard"
+    "displayName": "Frothfet"
   },
   "author": "Zach Hoeken",
   "license": "ISC",
   "bugs": {
-    "url": "https://github.com/hoeken/signalk-yarrboard-plugin/issues"
+    "url": "https://github.com/hoeken/signalk-frothfet-plugin/issues"
   },
-  "homepage": "https://github.com/hoeken/signalk-yarrboard-plugin#readme",
+  "homepage": "https://github.com/hoeken/signalk-frothfet-plugin#readme",
   "dependencies": {
     "websocket": "^1.0.34",
     "yarrboard-client": "^1.2.1"
