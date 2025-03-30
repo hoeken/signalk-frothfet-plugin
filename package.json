@@ -15,10 +15,6 @@
     "signalk-category-digital-switching",
     "signalk-webapp"
   ],
-  "signalk": {
-    "appIcon": "logo.png",
-    "displayName": "Frothfet"
-  },
   "author": "Zach Hoeken",
   "license": "ISC",
   "bugs": {

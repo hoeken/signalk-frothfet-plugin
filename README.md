@@ -1,6 +1,6 @@
-# signalk-yarrboard-plugin
+# signalk-frothfet-plugin
 
-SignalK plugin for interfacing with [Yarrboard](https://github.com/hoeken/yarrboard)
+SignalK plugin for interfacing with [FrothFET](https://github.com/hoeken/frothfet) digital switching boards.
 
 ## Setup
 
