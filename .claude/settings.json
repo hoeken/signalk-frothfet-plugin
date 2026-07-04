@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cd /tmp/brineomatic-ref && echo \"=== ROOT FILES ===\" && ls -la && echo \"\" && echo \"=== FULL TREE \\(no node_modules/.git\\) ===\" && find . -not -path './node_modules/*' -not -path './.git/*' -type f | sort)",
+      "Read(//tmp/brineomatic-ref/**)",
+      "Read(//tmp/brineomatic-ref/.github/workflows/**)",
+      "Read(//tmp/brineomatic-ref/src/**)"
+    ]
+  }
+}

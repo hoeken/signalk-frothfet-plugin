@@ -1,10 +1,24 @@
 {
   "name": "signalk-frothfet-plugin",
-  "version": "1.4.0",
-  "description": "Plugin for interfacing with Frothfet boards",
-  "main": "index.js",
+  "version": "1.0.0",
+  "description": "SignalK plugin for the Frothfet multi-channel digital load controller.  Data, control, and remote access.",
+  "main": "src/index.js",
+  "files": [
+    "src/",
+    "public/"
+  ],
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "node --test test/*.test.js",
+    "test:coverage": "node --test --experimental-test-coverage test/*.test.js",
+    "lint": "eslint .",
+    "lint:fix": "eslint --fix .",
+    "format": "eslint --fix . && prettier --write .",
+    "format:check": "eslint . && prettier --check .",
+    "release": "git tag -d v$npm_package_version; git tag v$npm_package_version && git push && git push origin v$npm_package_version"
+  },
+  "lint-staged": {
+    "*.js": "eslint --fix",
+    "*.json": "prettier --write"
   },
   "repository": {
     "type": "git",
@@ -12,9 +26,13 @@
   },
   "keywords": [
     "signalk-node-server-plugin",
-    "signalk-category-digital-switching",
-    "signalk-webapp"
+    "signalk-webapp",
+    "signalk-category-digital-switching"
   ],
+  "signalk": {
+    "displayName": "Frothfet",
+    "appIcon": "logo.png"
+  },
   "author": "Zach Hoeken",
   "license": "ISC",
   "bugs": {
@@ -22,7 +40,15 @@
   },
   "homepage": "https://github.com/hoeken/signalk-frothfet-plugin#readme",
   "dependencies": {
-    "websocket": "^1.0.34",
-    "yarrboard-client": "^1.2.1"
+    "http-proxy": "^1.18.1",
+    "yarrboard-client": "^1.4.1"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@stylistic/eslint-plugin": "^5.10.0",
+    "eslint": "^10.4.0",
+    "globals": "^17.6.0",
+    "prettier": "^3.8.3",
+    "ws": "^8.18.0"
   }
 }
