@@ -37,6 +37,12 @@ test("plugin metadata and schema", () => {
   assert.equal(typeof plugin.start, "function");
   assert.equal(typeof plugin.stop, "function");
 
+  const pathScheme = plugin.schema.properties.path_scheme;
+  assert.equal(pathScheme.type, "string");
+  assert.deepEqual(pathScheme.enum, ["none", "boardname", "uuid"]);
+  assert.equal(pathScheme.enum.length, pathScheme.enumNames.length);
+  assert.equal(pathScheme.default, "none");
+
   const config = plugin.schema.properties.config;
   assert.equal(config.type, "array");
   const props = config.items.properties;
@@ -78,9 +84,47 @@ test("createYarrboard", async (t) => {
 
     assert.equal(yb.hostname, "ff.local");
     assert.equal(yb.boardname, "ff");
-    assert.equal(yb.getMainBoardPath(), "electrical.frothfet.ff");
+    // Default path scheme is "none": channels hang straight off electrical.frothfet.
+    assert.equal(yb.getMainBoardPath(), "electrical.frothfet");
     assert.equal(yb.update_interval, 2000);
     assert.equal(yb.bus, plugin.bus);
+  });
+
+  await t.test("getMainBoardPath honours the configured path scheme", () => {
+    const plugin = createPlugin(createFakeApp());
+    const yb = plugin.createYarrboard("ff.local");
+
+    plugin.pathScheme = "none";
+    assert.equal(yb.getMainBoardPath(), "electrical.frothfet");
+
+    plugin.pathScheme = "boardname";
+    assert.equal(yb.getMainBoardPath(), "electrical.frothfet.ff");
+
+    plugin.pathScheme = "uuid";
+    // uuid comes from the board config; before it arrives, fall back to boardname.
+    assert.equal(yb.getMainBoardPath(), "electrical.frothfet.ff", "no config yet -> boardname fallback");
+    yb.handleConfig(configMessage([], { uuid: "abcd-1234" }));
+    assert.equal(yb.getMainBoardPath(), "electrical.frothfet.abcd-1234", "uuid once config arrives");
+  });
+
+  await t.test("start() applies the path_scheme option to published paths", () => {
+    const app = createFakeApp();
+    const plugin = createPlugin(app);
+
+    // start() reads options.path_scheme; default is "none" when omitted.
+    plugin.createYarrboard = () => ({
+      hostname: "ff.local",
+      boardname: "ff",
+      start() {},
+      close() {},
+      status() {},
+      getBoardName() {},
+    });
+    plugin.start({ path_scheme: "uuid", config: [] });
+    assert.equal(plugin.pathScheme, "uuid");
+
+    plugin.start({ config: [] });
+    assert.equal(plugin.pathScheme, "none", "omitted option defaults to none");
   });
 
   await t.test("onmessage routes status errors and successes to the app", () => {
@@ -125,6 +169,7 @@ test("createYarrboard", async (t) => {
   await t.test("handleConfig publishes board metadata and registers the control PUT handler", () => {
     const app = createFakeApp();
     const plugin = createPlugin(app);
+    plugin.pathScheme = "boardname"; // assert the board-namespaced paths
     const yb = plugin.createYarrboard("ff.local");
 
     yb.handleConfig(configMessage(
@@ -148,7 +193,7 @@ test("createYarrboard", async (t) => {
     assert.equal(deltas["electrical.frothfet.ff.board.uuid"], "abcd-1234");
     assert.equal(deltas["electrical.frothfet.ff.board.hostname"], "ff.local");
     assert.equal(deltas["electrical.frothfet.ff.board.use_ssl"], false);
-    assert.equal(deltas["electrical.frothfet.ff.pwm.nav-lights.name"], "Nav Lights");
+    assert.equal(deltas["electrical.frothfet.ff.channel.nav-lights.name"], "Nav Lights");
     // bus_voltage meta is registered because the board declared the capability.
     assert.equal(metas["electrical.frothfet.ff.board.bus_voltage"].units, "V");
 
@@ -165,6 +210,7 @@ test("createYarrboard", async (t) => {
   await t.test("handleConfig publishes per-channel metadata keyed by channel key", () => {
     const app = createFakeApp();
     const plugin = createPlugin(app);
+    plugin.pathScheme = "boardname"; // assert the board-namespaced paths
     const yb = plugin.createYarrboard("ff.local");
 
     yb.handleConfig(configMessage([
@@ -186,22 +232,43 @@ test("createYarrboard", async (t) => {
     const d = collectDeltas(app);
     const m = collectMetas(app);
 
-    assert.equal(d["electrical.frothfet.ff.pwm.fresh-water-pump.name"], "Fresh Water Pump");
-    assert.equal(d["electrical.frothfet.ff.pwm.fresh-water-pump.type"], "water_pump");
-    assert.equal(d["electrical.frothfet.ff.pwm.fresh-water-pump.enabled"], true);
-    close(d["electrical.frothfet.ff.pwm.fresh-water-pump.softFuse"], 20, "softFuse");
-    assert.equal(d["electrical.frothfet.ff.pwm.fresh-water-pump.defaultState"], "ON");
-    assert.equal(d["electrical.frothfet.ff.pwm.fresh-water-pump.softFuseType"], "SLOW");
+    assert.equal(d["electrical.frothfet.ff.channel.fresh-water-pump.name"], "Fresh Water Pump");
+    assert.equal(d["electrical.frothfet.ff.channel.fresh-water-pump.type"], "water_pump");
+    assert.equal(d["electrical.frothfet.ff.channel.fresh-water-pump.enabled"], true);
+    close(d["electrical.frothfet.ff.channel.fresh-water-pump.softFuse"], 20, "softFuse");
+    assert.equal(d["electrical.frothfet.ff.channel.fresh-water-pump.defaultState"], "ON");
+    assert.equal(d["electrical.frothfet.ff.channel.fresh-water-pump.softFuseType"], "SLOW");
     // Fields without a meta entry are still published as raw deltas.
-    assert.equal(d["electrical.frothfet.ff.pwm.fresh-water-pump.bypassMelody"], "MORSE_O");
+    assert.equal(d["electrical.frothfet.ff.channel.fresh-water-pump.bypassMelody"], "MORSE_O");
 
-    assert.equal(m["electrical.frothfet.ff.pwm.fresh-water-pump.softFuse"].units, "A");
-    assert.equal(m["electrical.frothfet.ff.pwm.fresh-water-pump.type"].description, "Channel type (e.g. bilge_pump, water_pump)");
+    assert.equal(m["electrical.frothfet.ff.channel.fresh-water-pump.softFuse"].units, "A");
+    assert.equal(m["electrical.frothfet.ff.channel.fresh-water-pump.type"].description, "Channel type (e.g. bilge_pump, water_pump)");
+  });
+
+  await t.test("the default \"none\" scheme publishes paths without a board segment", () => {
+    const app = createFakeApp();
+    const plugin = createPlugin(app); // pathScheme defaults to "none"
+    const yb = plugin.createYarrboard("ff.local");
+
+    yb.handleConfig(configMessage(
+      [{ id: 1, enabled: true, key: "nav-lights", name: "Nav Lights" }],
+      { name: "My Frothfet" },
+    ));
+
+    const d = collectDeltas(app);
+    assert.equal(d["electrical.frothfet.board.name"], "My Frothfet");
+    assert.equal(d["electrical.frothfet.channel.nav-lights.name"], "Nav Lights");
+    // No hostname segment is injected between frothfet and the channel.
+    assert.equal(d["electrical.frothfet.ff.channel.nav-lights.name"], undefined);
+
+    // The control PUT handler is registered on the un-namespaced path too.
+    assert.equal(app.putHandlers[0].path, "electrical.frothfet.control");
   });
 
   await t.test("only enabled channels are published", () => {
     const app = createFakeApp();
     const plugin = createPlugin(app);
+    plugin.pathScheme = "boardname"; // assert the board-namespaced paths
     const yb = plugin.createYarrboard("ff.local");
 
     yb.handleConfig(configMessage([
@@ -213,13 +280,14 @@ test("createYarrboard", async (t) => {
     yb.handleUpdate({ pwm: [{ id: 1, key: "bilge", state: "ON" }, { id: 2, key: "nav", state: "ON" }] });
 
     const d = collectDeltas(app);
-    assert.equal(d["electrical.frothfet.ff.pwm.bilge.state"], "ON", "enabled channel published");
-    assert.equal(d["electrical.frothfet.ff.pwm.nav.state"], undefined, "disabled channel skipped");
+    assert.equal(d["electrical.frothfet.ff.channel.bilge.state"], "ON", "enabled channel published");
+    assert.equal(d["electrical.frothfet.ff.channel.nav.state"], undefined, "disabled channel skipped");
   });
 
   await t.test("handleUpdate publishes and converts channel telemetry into SignalK base units", () => {
     const app = createFakeApp();
     const plugin = createPlugin(app);
+    plugin.pathScheme = "boardname"; // assert the board-namespaced paths
     const yb = plugin.createYarrboard("ff.local");
 
     yb.handleConfig(configMessage([{ id: 5, key: "fresh-water-pump", enabled: true }]));
@@ -246,7 +314,7 @@ test("createYarrboard", async (t) => {
 
     const d = collectDeltas(app);
     const m = collectMetas(app);
-    const base = "electrical.frothfet.ff.pwm.fresh-water-pump";
+    const base = "electrical.frothfet.ff.channel.fresh-water-pump";
 
     assert.equal(d[`${base}.state`], "ON");
     assert.equal(d[`${base}.source`], "frothfet");
@@ -268,6 +336,7 @@ test("createYarrboard", async (t) => {
   await t.test("channels are matched to config by id, not array position", () => {
     const app = createFakeApp();
     const plugin = createPlugin(app);
+    plugin.pathScheme = "boardname"; // assert the board-namespaced paths
     const yb = plugin.createYarrboard("ff.local");
 
     // Config lists the channels in a different order than the update, and only
@@ -286,13 +355,14 @@ test("createYarrboard", async (t) => {
     });
 
     const d = collectDeltas(app);
-    assert.equal(d["electrical.frothfet.ff.pwm.salt-water-pump.state"], "ON", "enabled channel published");
-    assert.equal(d["electrical.frothfet.ff.pwm.fresh-water-pump.state"], undefined, "disabled channel skipped");
+    assert.equal(d["electrical.frothfet.ff.channel.salt-water-pump.state"], "ON", "enabled channel published");
+    assert.equal(d["electrical.frothfet.ff.channel.fresh-water-pump.state"], undefined, "disabled channel skipped");
   });
 
   await t.test("handleUpdate records optional bus_voltage and uptime", () => {
     const app = createFakeApp();
     const plugin = createPlugin(app);
+    plugin.pathScheme = "boardname"; // assert the board-namespaced paths
     const yb = plugin.createYarrboard("ff.local");
 
     yb.handleConfig(configMessage([]));

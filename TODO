@@ -1,0 +1,13 @@
+v1.0.0
+
+- figure out how to store config data
+  - board level
+  - channel level
+- control PUT routing under the "none" path scheme:
+  - all boards register a handler on the shared electrical.frothfet.control path
+  - a PUT is ambiguous about which board's websocket receives it (each handler
+    forwards to its own board)
+  - decide how to route: by board id/uuid in the payload, or some other scheme
+- update readme
+- screenshots
+- update changelog

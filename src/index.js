@@ -12,6 +12,13 @@ module.exports = function (app) {
   plugin.bus = new SignalKBus(app, plugin.id);
   plugin.connections = [];
 
+  // How board paths are namespaced under `electrical.frothfet`. Set from the
+  // top-level `path_scheme` option in start(); see getMainBoardPath below.
+  //   "none"      -> electrical.frothfet.{channels}          (flat shared namespace)
+  //   "boardname" -> electrical.frothfet.{boardname}.{channels}
+  //   "uuid"      -> electrical.frothfet.{uuid}.{channels}
+  plugin.pathScheme = "none";
+
   // Per-channel metadata for the PWM output channels. `scale` (multiply) and
   // `offset` (add, applied after scale) convert the board's value into a SignalK
   // base unit before it is published.
@@ -43,6 +50,8 @@ module.exports = function (app) {
 
   plugin.start = function (options, _restartPlugin) {
     app.debug(`YarrboardClient.version: ${YarrboardClient.version}`);
+
+    plugin.pathScheme = options.path_scheme || "none";
 
     const descriptors = [];
 
@@ -103,6 +112,19 @@ module.exports = function (app) {
     title: "Frothfet",
     type: "object",
     properties: {
+      path_scheme: {
+        type: "string",
+        title: "SignalK path scheme",
+        description:
+          "How board paths are namespaced under electrical.frothfet. \"None\" publishes every board into one flat namespace (electrical.frothfet.…) — convenient for automation and scripting, since channels are addressed by slug without tracking which board owns them. \"Board name\" and \"Board UUID\" give each board its own namespace.",
+        enum: ["none", "boardname", "uuid"],
+        enumNames: [
+          "None — electrical.frothfet.{channels}",
+          "Board hostname — electrical.frothfet.{boardname}.{channels}",
+          "Board UUID — electrical.frothfet.{uuid}.{channels}",
+        ],
+        default: "none",
+      },
       config: {
         type: "array",
         title: "Add board config",
@@ -206,7 +228,7 @@ module.exports = function (app) {
         // Paths are keyed by the channel's human-readable `key` slug (e.g.
         // "fresh-water-pump"), falling back to the numeric id if unset. The
         // numeric id is still published for control commands, which use it.
-        let chPath = `${mainPath}.pwm.${cfg.key || ch.key || ch.id}`;
+        let chPath = `${mainPath}.channel.${cfg.key || ch.key || ch.id}`;
         for (const [key, value] of Object.entries(ch)) {
           const meta = plugin.pwmMetas[key];
           let scaled = value;
@@ -288,8 +310,25 @@ module.exports = function (app) {
       this.bus.sendUpdates();
     };
 
+    // Root path all of this board's deltas hang off of. The namespacing is
+    // controlled by the top-level `path_scheme` option (plugin.pathScheme):
+    //   "boardname" -> electrical.frothfet.{boardname} (hostname sans .local)
+    //   "uuid"      -> electrical.frothfet.{uuid}       (from the board config)
+    //   "none"      -> electrical.frothfet              (flat shared namespace; default)
+    // The uuid only exists once the board's config has arrived, so fall back to
+    // the hostname-derived boardname until then to keep the path stable/valid.
     yb.getMainBoardPath = function () {
-      return `electrical.frothfet.${this.boardname}`;
+      const base = "electrical.frothfet";
+      switch (plugin.pathScheme) {
+        case "boardname":
+          return `${base}.${this.boardname}`;
+        case "uuid": {
+          const uuid = this.config && this.config.network && this.config.network.uuid;
+          return `${base}.${uuid || this.boardname}`;
+        }
+        default:
+          return base;
+      }
     };
 
     // PUT handler: forward the raw JSON value straight to the board's websocket.

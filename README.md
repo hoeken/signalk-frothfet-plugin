@@ -4,7 +4,23 @@ SignalK plugin for interfacing with [FrothFET](https://github.com/hoeken/frothfe
 
 ## Setup
 
-Add your board hosts and configure login info in the plugin preferences. Per-board options:
+Add your board hosts and configure login info in the plugin preferences.
+
+**Path scheme** (top-level option) controls how board paths are namespaced under
+`electrical.frothfet`:
+
+| Scheme      | Default | Paths                                        |
+| ----------- | ------- | -------------------------------------------- |
+| `none`      | ✓       | `electrical.frothfet.{channels}`             |
+| `boardname` |         | `electrical.frothfet.{boardname}.{channels}` |
+| `uuid`      |         | `electrical.frothfet.{uuid}.{channels}`      |
+
+`none` collapses every board into one flat namespace — convenient for automation
+and scripting, since channels are addressed by their slug regardless of which
+board they're on. `boardname` and `uuid` give each board its own namespace
+(`uuid` survives a hostname change).
+
+Per-board options:
 
 | Option            | Default          | Description                                              |
 | ----------------- | ---------------- | -------------------------------------------------------- |
@@ -21,7 +37,9 @@ Add your board hosts and configure login info in the plugin preferences. Per-boa
 
 The plugin registers a SignalK PUT handler per board:
 
-- `electrical.frothfet.{boardname}.control` — the value is passed as raw JSON straight to the board's websocket. See the [protocol documentation](https://github.com/hoeken/yarrboard#protocol) for the message format. Login and auth are handled for you by SignalK.
+- `{board}.control` — the value is passed as raw JSON straight to the board's websocket. See the [protocol documentation](https://github.com/hoeken/yarrboard#protocol) for the message format. Login and auth are handled for you by SignalK.
+
+`{board}` is the namespace root chosen by the [path scheme](#setup): `electrical.frothfet`, `electrical.frothfet.{boardname}`, or `electrical.frothfet.{uuid}`.
 
 ## Remote access (reverse proxy)
 
@@ -54,24 +72,27 @@ to the SignalK host.
 
 ## SignalK Path Info
 
-`{boardname}` is your board hostname without the `.local` suffix, defaults to `frothfet`.
+`{board}` below is the namespace root set by the [path scheme](#setup):
+`electrical.frothfet` (`none`), `electrical.frothfet.{boardname}` (`boardname`),
+or `electrical.frothfet.{uuid}` (`uuid`). `{boardname}` is the board hostname
+without the `.local` suffix (defaults to `frothfet`).
 
 ### Board info
 
-| Path                                              | Units | Description                               |
-| ------------------------------------------------- | ----- | ----------------------------------------- |
-| `electrical.frothfet.{boardname}.board.firmware_version` |       | Firmware version                          |
-| `electrical.frothfet.{boardname}.board.hardware_version` |       | Hardware version                          |
-| `electrical.frothfet.{boardname}.board.hostname`         |       | Local board hostname                      |
-| `electrical.frothfet.{boardname}.board.name`             |       | User friendly name                        |
-| `electrical.frothfet.{boardname}.board.uptime`           | s     | Controller uptime                         |
-| `electrical.frothfet.{boardname}.board.use_ssl`          |       | Does the board use SSL?                   |
-| `electrical.frothfet.{boardname}.board.uuid`             |       | Unique ID of the board                    |
-| `electrical.frothfet.{boardname}.board.bus_voltage`      | V     | Supply voltage to the board (if reported) |
+| Path                              | Units | Description                               |
+| --------------------------------- | ----- | ----------------------------------------- |
+| `{board}.board.firmware_version`  |       | Firmware version                          |
+| `{board}.board.hardware_version`  |       | Hardware version                          |
+| `{board}.board.hostname`          |       | Local board hostname                      |
+| `{board}.board.name`              |       | User friendly name                        |
+| `{board}.board.uptime`            | s     | Controller uptime                         |
+| `{board}.board.use_ssl`           |       | Does the board use SSL?                   |
+| `{board}.board.uuid`              |       | Unique ID of the board                    |
+| `{board}.board.bus_voltage`       | V     | Supply voltage to the board (if reported) |
 
 ### PWM channels
 
-Published per enabled channel under `electrical.frothfet.{boardname}.pwm.{key}.*`,
+Published per enabled channel under `{board}.channel.{key}.*`,
 where `{key}` is the channel's slug (e.g. `fresh-water-pump`), falling back to the
 numeric channel id if no key is set:
 

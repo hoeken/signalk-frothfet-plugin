@@ -2,11 +2,13 @@
 
 ### Changed
 
-- **Channel paths are keyed by slug.** PWM channels are now published under `electrical.frothfet.{boardname}.pwm.{key}.*` (e.g. `…pwm.fresh-water-pump.state`) instead of the numeric id, falling back to the id when a channel has no key. The numeric `id` is still published for control commands.
+- **Configurable path scheme.** A new top-level `path_scheme` option controls how boards are namespaced under `electrical.frothfet`: `none` (default) publishes every board into one flat namespace (`electrical.frothfet.{channels}`), while `boardname` and `uuid` give each board its own namespace (`electrical.frothfet.{boardname|uuid}.{channels}`). The default changed from v1.0.0's implicit `{boardname}` namespacing to `none`.
+- **Channel paths renamed and keyed by slug.** PWM channels are now published under `{board}.channel.{key}.*` (e.g. `…channel.fresh-water-pump.state`) — renamed from `{board}.pwm.{id}.*` — keyed by the channel's slug instead of the numeric id, falling back to the id when a channel has no key. The numeric `id` is still published for control commands.
 - **New nested config format.** The board now wraps its config in a `config` envelope with channels under `config.pwm.channels`; board metadata is read from `config.app.*`, `config.config.name`, `config.network.uuid`, and `config.http.ssl_enabled`.
 
 ### Added
 
+- **Path scheme selector** in the plugin config (`none` / `boardname` / `uuid`) — see above.
 - **New per-channel telemetry** published by the board: `key` (channel slug), `wattage` (`W`), and `temperature` (converted from Celsius to Kelvin, `K`).
 - **New per-channel config fields** documented with SignalK meta: `type`, `softFuseType`, and `defaultState`.
 
