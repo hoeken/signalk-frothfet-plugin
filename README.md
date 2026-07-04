@@ -71,27 +71,34 @@ to the SignalK host.
 
 ### PWM channels
 
-Published per enabled channel under `electrical.frothfet.{boardname}.pwm.{id}.*`:
+Published per enabled channel under `electrical.frothfet.{boardname}.pwm.{key}.*`,
+where `{key}` is the channel's slug (e.g. `fresh-water-pump`), falling back to the
+numeric channel id if no key is set:
 
-| Path         | Units | Description                                             |
-| ------------ | ----- | ------------------------------------------------------- |
-| `id`         |       | ID of each channel                                      |
-| `name`       |       | User defined name of channel                            |
-| `source`     |       | Source of last state change                             |
-| `enabled`    |       | Whether the channel is in use or should be ignored      |
-| `hasPWM`     |       | Whether this channel can do PWM (duty cycle, dimming)   |
-| `hasCurrent` |       | Whether this channel has current monitoring             |
-| `softFuse`   | A     | Software defined fuse, in amps                          |
-| `isDimmable` |       | Whether the channel has dimming enabled                 |
-| `state`      |       | Whether the channel is on or not                        |
-| `duty`       | ratio | Duty cycle as a ratio from 0 to 1                       |
-| `voltage`    | V     | Voltage of channel                                      |
-| `current`    | A     | Current of channel                                      |
-| `aH`         | C     | Consumed charge since board restart (amp-hours × 3600)  |
-| `wH`         | J     | Consumed energy since board restart (watt-hours × 3600) |
+| Path           | Units | Description                                             |
+| -------------- | ----- | ------------------------------------------------------- |
+| `id`           |       | ID of each channel (used for control commands)          |
+| `key`          |       | User defined key (slug) of channel                      |
+| `name`         |       | User defined name of channel                            |
+| `type`         |       | Channel type (e.g. `bilge_pump`, `water_pump`)          |
+| `source`       |       | Source of last state change                             |
+| `enabled`      |       | Whether the channel is in use or should be ignored      |
+| `hasCurrent`   |       | Whether this channel has current monitoring             |
+| `softFuse`     | A     | Software defined fuse, in amps                          |
+| `softFuseType` |       | Soft-fuse trip behavior (e.g. `SLOW`, `FAST`)           |
+| `isDimmable`   |       | Whether the channel has dimming enabled                 |
+| `defaultState` |       | State the channel powers up in                          |
+| `state`        |       | Whether the channel is on or not                        |
+| `duty`         | ratio | Duty cycle as a ratio from 0 to 1                       |
+| `voltage`      | V     | Voltage of channel                                      |
+| `current`      | A     | Current of channel                                      |
+| `wattage`      | W     | Power draw of channel                                   |
+| `temperature`  | K     | Temperature of channel (°C + 273.15)                    |
+| `aH`           | C     | Consumed charge since board restart (amp-hours × 3600)  |
+| `wH`           | J     | Consumed energy since board restart (watt-hours × 3600) |
 
-> Amp-hours and watt-hours reported by the board are converted to SignalK base
-> units (Coulombs and Joules) before publishing.
+> Amp-hours and watt-hours are converted to SignalK base units (Coulombs and
+> Joules), and channel temperature from Celsius to Kelvin, before publishing.
 
 ## Development
 
@@ -111,8 +118,9 @@ cover:
 
 - **`signalk-bus.js`** — delta/meta queuing, batching, de-duplication.
 - **`index.js`** — the plugin schema, the `/boards` route, the yarrboard-client
-  message routing, the PWM channel publishing (only enabled channels, aH→C /
-  wH→J conversion), and the control PUT handler. No board connection is opened.
+  message routing, the PWM channel publishing (only enabled channels, key-based
+  paths, id-based config matching, aH→C / wH→J / °C→K conversion), and the
+  control PUT handler. No board connection is opened.
 - **`signalk-board-proxy.js`** — descriptor filtering (enable/port/duplicate),
   target URL building, and the `/boards` metadata. `ReverseProxy` is stubbed so
   no ports are opened.

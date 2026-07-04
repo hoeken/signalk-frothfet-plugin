@@ -12,23 +12,31 @@ module.exports = function (app) {
   plugin.bus = new SignalKBus(app, plugin.id);
   plugin.connections = [];
 
-  // Per-channel metadata for the PWM output channels. `scale` (optional) converts
-  // the board's value into a SignalK base unit before it is published.
-  //   aH (amp-hours)  -> C (Coulombs)  x3600
-  //   wH (watt-hours) -> J (Joules)    x3600
+  // Per-channel metadata for the PWM output channels. `scale` (multiply) and
+  // `offset` (add, applied after scale) convert the board's value into a SignalK
+  // base unit before it is published.
+  //   aH (amp-hours)   -> C (Coulombs)  x3600
+  //   wH (watt-hours)  -> J (Joules)    x3600
+  //   temperature (°C) -> K (Kelvin)    +273.15
   plugin.pwmMetas = {
     id: { description: "ID of each channel" },
+    key: { description: "User defined key (slug) of channel" },
     name: { description: "User defined name of channel" },
+    type: { description: "Channel type (e.g. bilge_pump, water_pump)" },
     source: { description: "Source of last state change" },
     enabled: { description: "Whether or not this channel is in use or should be ignored" },
     hasPWM: { description: "Whether this channel hardware is capable of PWM (duty cycle, dimming, etc)" },
     hasCurrent: { description: "Whether this channel has current monitoring" },
     softFuse: { units: "A", description: "Software defined fuse, in amps" },
+    softFuseType: { description: "Soft-fuse trip behavior (e.g. SLOW, FAST)" },
     isDimmable: { description: "Whether the channel has dimming enabled or not" },
+    defaultState: { description: "State the channel powers up in" },
     state: { description: "Whether the channel is on or not" },
     duty: { units: "ratio", description: "Duty cycle as a ratio from 0 to 1" },
     voltage: { units: "V", description: "Voltage of channel" },
     current: { units: "A", description: "Current of channel" },
+    wattage: { units: "W", description: "Power draw of channel" },
+    temperature: { units: "K", description: "Temperature of channel", offset: 273.15 },
     aH: { units: "C", description: "Consumed charge since board restart", scale: 3600 },
     wH: { units: "J", description: "Consumed energy since board restart", scale: 3600 },
   };
@@ -61,7 +69,7 @@ module.exports = function (app) {
         use_ssl: board.use_ssl,
         proxy_port: board.proxy_port,
         enable_proxy: board.enable_proxy,
-        name: () => (frothfet.config && frothfet.config.name) || frothfet.boardname,
+        name: () => frothfet.getBoardName(),
         status: () => frothfet.status(),
       });
     }
@@ -175,26 +183,43 @@ module.exports = function (app) {
       this.startUpdatePoller(this.update_interval);
     };
 
-    // Shared by config and update messages: walk each channel type and publish a
-    // delta (and, once, a meta) for every reported field of every enabled channel.
-    yb.queueDeltasAndUpdates = function (data) {
+    // Find a channel's config entry by id. The board's config lists channels
+    // under config.pwm.channels; matching by id (not array position) is robust
+    // to the board's 1-based ids.
+    yb.getChannelConfig = function (id) {
+      const channels = (this.config && this.config.pwm && this.config.pwm.channels) || [];
+      return channels.find((c) => c.id === id);
+    };
+
+    // Shared by config and update messages: walk a list of PWM channels and
+    // publish a delta (and, once, a meta) for every reported field of every
+    // enabled channel. `channels` comes from config.pwm.channels (config) or the
+    // flat data.pwm array (updates); both carry `id` and `key`.
+    yb.queueChannels = function (channels) {
       let mainPath = this.getMainBoardPath();
 
-      // PWM output channels.
-      if (data.pwm) {
-        for (const ch of data.pwm) {
-          if (!(this.config.pwm && this.config.pwm[ch.id] && this.config.pwm[ch.id].enabled))
-            continue;
+      for (const ch of channels || []) {
+        const cfg = this.getChannelConfig(ch.id);
+        if (!(cfg && cfg.enabled))
+          continue;
 
-          let chPath = `${mainPath}.pwm.${ch.id}`;
-          for (const [key, value] of Object.entries(ch)) {
-            const meta = plugin.pwmMetas[key];
-            const scaled = meta && meta.scale ? value * meta.scale : value;
-            this.bus.queueDelta(`${chPath}.${key}`, scaled);
-
-            if (meta)
-              this.bus.queueMeta(`${chPath}.${key}`, meta.units ? { units: meta.units, description: meta.description } : { description: meta.description });
+        // Paths are keyed by the channel's human-readable `key` slug (e.g.
+        // "fresh-water-pump"), falling back to the numeric id if unset. The
+        // numeric id is still published for control commands, which use it.
+        let chPath = `${mainPath}.pwm.${cfg.key || ch.key || ch.id}`;
+        for (const [key, value] of Object.entries(ch)) {
+          const meta = plugin.pwmMetas[key];
+          let scaled = value;
+          if (meta) {
+            if (meta.scale)
+              scaled = scaled * meta.scale;
+            if (meta.offset)
+              scaled = scaled + meta.offset;
           }
+          this.bus.queueDelta(`${chPath}.${key}`, scaled);
+
+          if (meta)
+            this.bus.queueMeta(`${chPath}.${key}`, meta.units ? { units: meta.units, description: meta.description } : { description: meta.description });
         }
       }
 
@@ -202,10 +227,19 @@ module.exports = function (app) {
       // can be enabled here once the board reports them.
     };
 
+    // The board's user-facing name, read from the config once it has arrived.
+    yb.getBoardName = function () {
+      return (this.config && this.config.config && this.config.config.name) || this.boardname;
+    };
+
     yb.handleConfig = function (data) {
-      this.config = data;
+      // The board wraps the real config in a `config` envelope (alongside
+      // `capabilities`, `status`, `msgid`); everything below lives under it.
+      this.config = data.config || {};
 
       let mainPath = this.getMainBoardPath();
+      const appInfo = this.config.app || {};
+      const network = this.config.network || {};
 
       // Passing raw JSON to the board's websocket lets the FrothFET web protocol
       // be driven straight from SignalK PUTs. Register once per connection.
@@ -214,20 +248,20 @@ module.exports = function (app) {
         this.putHandlerRegistered = true;
       }
 
-      this.bus.queueConsolidated(`${mainPath}.board.firmware_version`, data.firmware_version, { description: "Firmware version of the board" });
-      this.bus.queueConsolidated(`${mainPath}.board.hardware_version`, data.hardware_version, { description: "Hardware version of the board" });
-      this.bus.queueConsolidated(`${mainPath}.board.name`, data.name, { description: "User defined name of the board" });
-      this.bus.queueConsolidated(`${mainPath}.board.uuid`, data.uuid, { description: "Unique ID of the board" });
+      this.bus.queueConsolidated(`${mainPath}.board.firmware_version`, appInfo.firmware_version, { description: "Firmware version of the board" });
+      this.bus.queueConsolidated(`${mainPath}.board.hardware_version`, appInfo.hardware_version, { description: "Hardware version of the board" });
+      this.bus.queueConsolidated(`${mainPath}.board.name`, this.getBoardName(), { description: "User defined name of the board" });
+      this.bus.queueConsolidated(`${mainPath}.board.uuid`, network.uuid, { description: "Unique ID of the board" });
       this.bus.queueConsolidated(`${mainPath}.board.hostname`, this.hostname, { description: "Hostname of the board" });
-      this.bus.queueConsolidated(`${mainPath}.board.use_ssl`, data.use_ssl, { description: "Whether the app uses SSL or not" });
+      this.bus.queueConsolidated(`${mainPath}.board.use_ssl`, this.config.http && this.config.http.ssl_enabled, { description: "Whether the app uses SSL or not" });
       this.bus.queueMeta(`${mainPath}.board.uptime`, { units: "s", description: "Seconds since the last reboot" });
 
-      //some boards don't have this.
-      if (data.bus_voltage)
+      //only publish the bus voltage meta if the board reports the capability.
+      if (data.capabilities && data.capabilities.bus_voltage)
         this.bus.queueMeta(`${mainPath}.board.bus_voltage`, { units: "V", description: "Supply voltage to the board" });
 
       //common handler for config and update
-      this.queueDeltasAndUpdates(data);
+      this.queueChannels(this.config.pwm && this.config.pwm.channels);
 
       //actually send them off now.
       this.bus.sendUpdates();
@@ -247,8 +281,8 @@ module.exports = function (app) {
       if (data.uptime)
         this.bus.queueConsolidated(`${mainPath}.board.uptime`, Math.round(data.uptime / 1000000), { units: "s", description: "Uptime since the last reboot" });
 
-      //common handler for config and update
-      this.queueDeltasAndUpdates(data);
+      //common handler for config and update (updates carry a flat pwm array)
+      this.queueChannels(data.pwm);
 
       //actually send them off now.
       this.bus.sendUpdates();

@@ -12,6 +12,23 @@ function close(actual, expected, msg) {
   );
 }
 
+// Assemble a board `config` message in the nested envelope shape the firmware
+// sends: the real config lives under `config`, with channels at
+// `config.pwm.channels`, alongside `capabilities`.
+function configMessage(channels = [], opts = {}) {
+  return {
+    msg: "config",
+    config: {
+      app: { firmware_version: opts.firmware_version, hardware_version: opts.hardware_version },
+      config: { name: opts.name },
+      network: { uuid: opts.uuid },
+      http: { ssl_enabled: opts.ssl_enabled },
+      pwm: { channels },
+    },
+    capabilities: opts.capabilities,
+  };
+}
+
 test("plugin metadata and schema", () => {
   const plugin = createPlugin(createFakeApp());
 
@@ -82,8 +99,8 @@ test("createYarrboard", async (t) => {
     const plugin = createPlugin(createFakeApp());
     const yb = plugin.createYarrboard("ff.local");
 
-    yb.onmessage({ msg: "config", firmware_version: "9.9.9" });
-    assert.equal(yb.config.firmware_version, "9.9.9");
+    yb.onmessage({ msg: "config", config: { app: { firmware_version: "9.9.9" } } });
+    assert.equal(yb.config.app.firmware_version, "9.9.9");
   });
 
   await t.test("handleUpdate is ignored until a config has arrived", () => {
@@ -95,28 +112,45 @@ test("createYarrboard", async (t) => {
     assert.equal(app.messages.length, 0, "no deltas before config");
   });
 
+  await t.test("getBoardName falls back to the hostname-derived name until config arrives", () => {
+    const plugin = createPlugin(createFakeApp());
+    const yb = plugin.createYarrboard("ff.local");
+
+    assert.equal(yb.getBoardName(), "ff", "no config yet -> boardname");
+
+    yb.handleConfig(configMessage([], { name: "Pumps" }));
+    assert.equal(yb.getBoardName(), "Pumps", "config.config.name once connected");
+  });
+
   await t.test("handleConfig publishes board metadata and registers the control PUT handler", () => {
     const app = createFakeApp();
     const plugin = createPlugin(app);
     const yb = plugin.createYarrboard("ff.local");
 
-    yb.handleConfig({
-      firmware_version: "1.2.3",
-      hardware_version: "rev-a",
-      name: "My Frothfet",
-      uuid: "abcd-1234",
-      use_ssl: false,
-      pwm: [{ id: 0, enabled: true, name: "Nav Lights" }],
-    });
+    yb.handleConfig(configMessage(
+      [{ id: 1, enabled: true, name: "Nav Lights", key: "nav-lights" }],
+      {
+        firmware_version: "1.2.3",
+        hardware_version: "rev-a",
+        name: "My Frothfet",
+        uuid: "abcd-1234",
+        ssl_enabled: false,
+        capabilities: { bus_voltage: {} },
+      },
+    ));
 
     const deltas = collectDeltas(app);
+    const metas = collectMetas(app);
 
     assert.equal(deltas["electrical.frothfet.ff.board.firmware_version"], "1.2.3");
     assert.equal(deltas["electrical.frothfet.ff.board.hardware_version"], "rev-a");
     assert.equal(deltas["electrical.frothfet.ff.board.name"], "My Frothfet");
     assert.equal(deltas["electrical.frothfet.ff.board.uuid"], "abcd-1234");
     assert.equal(deltas["electrical.frothfet.ff.board.hostname"], "ff.local");
-    assert.equal(deltas["electrical.frothfet.ff.pwm.0.name"], "Nav Lights");
+    assert.equal(deltas["electrical.frothfet.ff.board.use_ssl"], false);
+    assert.equal(deltas["electrical.frothfet.ff.pwm.nav-lights.name"], "Nav Lights");
+    // bus_voltage meta is registered because the board declared the capability.
+    assert.equal(metas["electrical.frothfet.ff.board.bus_voltage"].units, "V");
 
     // A single control PUT handler is registered on the board path.
     assert.equal(app.putHandlers.length, 1);
@@ -124,8 +158,45 @@ test("createYarrboard", async (t) => {
     assert.equal(app.putHandlers[0].path, "electrical.frothfet.ff.control");
 
     // A second config (reconnect) must not re-register the handler.
-    yb.handleConfig({ pwm: [] });
+    yb.handleConfig(configMessage([]));
     assert.equal(app.putHandlers.length, 1, "PUT handler registered once per connection");
+  });
+
+  await t.test("handleConfig publishes per-channel metadata keyed by channel key", () => {
+    const app = createFakeApp();
+    const plugin = createPlugin(app);
+    const yb = plugin.createYarrboard("ff.local");
+
+    yb.handleConfig(configMessage([
+      {
+        id: 5,
+        name: "Fresh Water Pump",
+        key: "fresh-water-pump",
+        enabled: true,
+        type: "water_pump",
+        hasCurrent: true,
+        softFuse: 20,
+        isDimmable: false,
+        defaultState: "ON",
+        softFuseType: "SLOW",
+        bypassMelody: "MORSE_O",
+      },
+    ]));
+
+    const d = collectDeltas(app);
+    const m = collectMetas(app);
+
+    assert.equal(d["electrical.frothfet.ff.pwm.fresh-water-pump.name"], "Fresh Water Pump");
+    assert.equal(d["electrical.frothfet.ff.pwm.fresh-water-pump.type"], "water_pump");
+    assert.equal(d["electrical.frothfet.ff.pwm.fresh-water-pump.enabled"], true);
+    close(d["electrical.frothfet.ff.pwm.fresh-water-pump.softFuse"], 20, "softFuse");
+    assert.equal(d["electrical.frothfet.ff.pwm.fresh-water-pump.defaultState"], "ON");
+    assert.equal(d["electrical.frothfet.ff.pwm.fresh-water-pump.softFuseType"], "SLOW");
+    // Fields without a meta entry are still published as raw deltas.
+    assert.equal(d["electrical.frothfet.ff.pwm.fresh-water-pump.bypassMelody"], "MORSE_O");
+
+    assert.equal(m["electrical.frothfet.ff.pwm.fresh-water-pump.softFuse"].units, "A");
+    assert.equal(m["electrical.frothfet.ff.pwm.fresh-water-pump.type"].description, "Channel type (e.g. bilge_pump, water_pump)");
   });
 
   await t.test("only enabled channels are published", () => {
@@ -133,37 +204,40 @@ test("createYarrboard", async (t) => {
     const plugin = createPlugin(app);
     const yb = plugin.createYarrboard("ff.local");
 
-    yb.handleConfig({
-      pwm: [
-        { id: 0, enabled: true },
-        { id: 1, enabled: false },
-      ],
-    });
+    yb.handleConfig(configMessage([
+      { id: 1, key: "bilge", enabled: true },
+      { id: 2, key: "nav", enabled: false },
+    ]));
     app.messages = [];
 
-    yb.handleUpdate({ pwm: [{ id: 0, state: true }, { id: 1, state: true }] });
+    yb.handleUpdate({ pwm: [{ id: 1, key: "bilge", state: "ON" }, { id: 2, key: "nav", state: "ON" }] });
 
     const d = collectDeltas(app);
-    assert.equal(d["electrical.frothfet.ff.pwm.0.state"], true, "enabled channel published");
-    assert.equal(d["electrical.frothfet.ff.pwm.1.state"], undefined, "disabled channel skipped");
+    assert.equal(d["electrical.frothfet.ff.pwm.bilge.state"], "ON", "enabled channel published");
+    assert.equal(d["electrical.frothfet.ff.pwm.nav.state"], undefined, "disabled channel skipped");
   });
 
-  await t.test("handleUpdate converts channel energy fields into SignalK base units", () => {
+  await t.test("handleUpdate publishes and converts channel telemetry into SignalK base units", () => {
     const app = createFakeApp();
     const plugin = createPlugin(app);
     const yb = plugin.createYarrboard("ff.local");
 
-    yb.handleConfig({ pwm: [{ id: 0, enabled: true }] });
+    yb.handleConfig(configMessage([{ id: 5, key: "fresh-water-pump", enabled: true }]));
     app.messages = []; // ignore the config batch; focus on the update
 
+    // Mirrors the board's live update shape: flat pwm array, 1-based id, string
+    // key/state/source, plus wattage and temperature. Paths use the key slug.
     yb.handleUpdate({
       pwm: [
         {
-          id: 0,
-          state: true,
-          duty: 0.5, // passthrough (ratio)
-          voltage: 12.3, // passthrough (V)
-          current: 1.2, // passthrough (A)
+          id: 5,
+          key: "fresh-water-pump",
+          state: "ON",
+          source: "frothfet",
+          voltage: 26.88, // passthrough (V)
+          current: 0.03, // passthrough (A)
+          wattage: 0.82, // passthrough (W)
+          temperature: 36.5, // Celsius -> Kelvin (+273.15)
           aH: 2, // amp-hours -> Coulombs (*3600)
           wH: 24, // watt-hours -> Joules (*3600)
         },
@@ -172,19 +246,48 @@ test("createYarrboard", async (t) => {
 
     const d = collectDeltas(app);
     const m = collectMetas(app);
+    const base = "electrical.frothfet.ff.pwm.fresh-water-pump";
 
-    assert.equal(d["electrical.frothfet.ff.pwm.0.state"], true);
-    close(d["electrical.frothfet.ff.pwm.0.duty"], 0.5, "duty");
-    close(d["electrical.frothfet.ff.pwm.0.voltage"], 12.3, "voltage");
-    close(d["electrical.frothfet.ff.pwm.0.current"], 1.2, "current");
-    close(d["electrical.frothfet.ff.pwm.0.aH"], 7200, "aH -> C");
-    close(d["electrical.frothfet.ff.pwm.0.wH"], 86400, "wH -> J");
+    assert.equal(d[`${base}.state`], "ON");
+    assert.equal(d[`${base}.source`], "frothfet");
+    close(d[`${base}.voltage`], 26.88, "voltage");
+    close(d[`${base}.current`], 0.03, "current");
+    close(d[`${base}.wattage`], 0.82, "wattage");
+    close(d[`${base}.temperature`], 309.65, "temperature C -> K");
+    close(d[`${base}.aH`], 7200, "aH -> C");
+    close(d[`${base}.wH`], 86400, "wH -> J");
 
-    assert.equal(m["electrical.frothfet.ff.pwm.0.aH"].units, "C");
-    assert.equal(m["electrical.frothfet.ff.pwm.0.wH"].units, "J");
-    assert.equal(m["electrical.frothfet.ff.pwm.0.voltage"].units, "V");
-    assert.equal(m["electrical.frothfet.ff.pwm.0.current"].units, "A");
-    assert.equal(m["electrical.frothfet.ff.pwm.0.duty"].units, "ratio");
+    assert.equal(m[`${base}.aH`].units, "C");
+    assert.equal(m[`${base}.wH`].units, "J");
+    assert.equal(m[`${base}.voltage`].units, "V");
+    assert.equal(m[`${base}.current`].units, "A");
+    assert.equal(m[`${base}.wattage`].units, "W");
+    assert.equal(m[`${base}.temperature`].units, "K");
+  });
+
+  await t.test("channels are matched to config by id, not array position", () => {
+    const app = createFakeApp();
+    const plugin = createPlugin(app);
+    const yb = plugin.createYarrboard("ff.local");
+
+    // Config lists the channels in a different order than the update, and only
+    // id 6 is enabled. An array-index lookup would gate the wrong channel.
+    yb.handleConfig(configMessage([
+      { id: 6, key: "salt-water-pump", enabled: true },
+      { id: 5, key: "fresh-water-pump", enabled: false },
+    ]));
+    app.messages = [];
+
+    yb.handleUpdate({
+      pwm: [
+        { id: 5, key: "fresh-water-pump", state: "ON" },
+        { id: 6, key: "salt-water-pump", state: "ON" },
+      ],
+    });
+
+    const d = collectDeltas(app);
+    assert.equal(d["electrical.frothfet.ff.pwm.salt-water-pump.state"], "ON", "enabled channel published");
+    assert.equal(d["electrical.frothfet.ff.pwm.fresh-water-pump.state"], undefined, "disabled channel skipped");
   });
 
   await t.test("handleUpdate records optional bus_voltage and uptime", () => {
@@ -192,7 +295,7 @@ test("createYarrboard", async (t) => {
     const plugin = createPlugin(app);
     const yb = plugin.createYarrboard("ff.local");
 
-    yb.handleConfig({ pwm: [] });
+    yb.handleConfig(configMessage([]));
     app.messages = [];
 
     yb.handleUpdate({ bus_voltage: 13.2, uptime: 5_000_000 });

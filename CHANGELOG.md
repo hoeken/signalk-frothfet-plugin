@@ -1,3 +1,19 @@
+# Unreleased
+
+### Changed
+
+- **Channel paths are keyed by slug.** PWM channels are now published under `electrical.frothfet.{boardname}.pwm.{key}.*` (e.g. `…pwm.fresh-water-pump.state`) instead of the numeric id, falling back to the id when a channel has no key. The numeric `id` is still published for control commands.
+- **New nested config format.** The board now wraps its config in a `config` envelope with channels under `config.pwm.channels`; board metadata is read from `config.app.*`, `config.config.name`, `config.network.uuid`, and `config.http.ssl_enabled`.
+
+### Added
+
+- **New per-channel telemetry** published by the board: `key` (channel slug), `wattage` (`W`), and `temperature` (converted from Celsius to Kelvin, `K`).
+- **New per-channel config fields** documented with SignalK meta: `type`, `softFuseType`, and `defaultState`.
+
+### Fixed
+
+- **1-based channel ids.** The board reports channel ids starting at 1; channels are matched to their config entry by id rather than array position, so enabled channels are no longer mis-gated.
+
 # v1.0.0
 
 _2026-07-04_
