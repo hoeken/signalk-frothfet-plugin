@@ -1,13 +1,23 @@
 v1.0.0
 
 - figure out how to store config data
+  - change to shareable_config command
+  - config needs to have per-board paths.  if pathScheme == 'none', default to 'boardname' for config pathing
   - board level
+    - config parameter whitelist
   - channel level
+    - config parameter whitelist
+    - configs live under electrical.frothfet.{board}.channel.{key}.*
 - control PUT routing under the "none" path scheme:
   - all boards register a handler on the shared electrical.frothfet.control path
   - a PUT is ambiguous about which board's websocket receives it (each handler
     forwards to its own board)
   - decide how to route: by board id/uuid in the payload, or some other scheme
+- n2k digital switching
+  - figure out what plugin can go from signalk -> n2k for digital switching
+  - find out what format it prefers for data
+  - add an option to also publish to the n2k digital switching paths
+  - add plugin as recommended
 - update readme
 - screenshots
 - update changelog
