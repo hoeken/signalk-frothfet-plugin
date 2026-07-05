@@ -188,7 +188,7 @@ test("createYarrboard", async (t) => {
     const metas = collectMetas(app);
 
     // All static config is one JSON object at the per-board config path.
-    const cfg = deltas["electrical.frothfet.config.ff"];
+    const cfg = deltas["electrical.frothfet.ff.config"];
     assert.equal(cfg.firmware_version, "1.2.3");
     assert.equal(cfg.hardware_version, "rev-a");
     assert.equal(cfg.name, "My Frothfet");
@@ -198,20 +198,23 @@ test("createYarrboard", async (t) => {
     // Channels are nested inside the same object, keyed by slug.
     assert.equal(cfg.channels["nav-lights"].name, "Nav Lights");
     // No per-field config paths, and no duplication on the live data path.
-    assert.equal(deltas["electrical.frothfet.config.ff.firmware_version"], undefined);
+    assert.equal(deltas["electrical.frothfet.ff.config.firmware_version"], undefined);
     assert.equal(deltas["electrical.frothfet.ff.board.name"], undefined);
     // The config object carries a meta description; bus_voltage meta is on the live path.
-    assert.equal(metas["electrical.frothfet.config.ff"].description, "Board and channel configuration");
+    assert.equal(metas["electrical.frothfet.ff.config"].description, "Board and channel configuration");
     assert.equal(metas["electrical.frothfet.ff.board.bus_voltage"].units, "V");
 
-    // A single control PUT handler is registered on the board path.
-    assert.equal(app.putHandlers.length, 1);
-    assert.equal(app.putHandlers[0].context, "vessels.self");
-    assert.equal(app.putHandlers[0].path, "electrical.frothfet.ff.control");
+    // Two PUT handlers: the per-board control path (board-namespaced) and the
+    // shared router at the flat electrical.frothfet.control path.
+    assert.equal(app.putHandlers.length, 2);
+    const paths = app.putHandlers.map((h) => h.path);
+    assert.ok(app.putHandlers.every((h) => h.context === "vessels.self"));
+    assert.ok(paths.includes("electrical.frothfet.ff.control"), "per-board control path");
+    assert.ok(paths.includes("electrical.frothfet.control"), "shared control router path");
 
-    // A second config (reconnect) must not re-register the handler.
+    // A second config (reconnect) must not re-register either handler.
     yb.handleConfig(configMessage([]));
-    assert.equal(app.putHandlers.length, 1, "PUT handler registered once per connection");
+    assert.equal(app.putHandlers.length, 2, "PUT handlers registered once");
   });
 
   await t.test("channels are nested in the config object, keyed by slug, trivia dropped", () => {
@@ -236,7 +239,7 @@ test("createYarrboard", async (t) => {
       },
     ]));
 
-    const ch = collectDeltas(app)["electrical.frothfet.config.ff"].channels["fresh-water-pump"];
+    const ch = collectDeltas(app)["electrical.frothfet.ff.config"].channels["fresh-water-pump"];
 
     assert.equal(ch.id, 5);
     assert.equal(ch.name, "Fresh Water Pump");
@@ -254,15 +257,15 @@ test("createYarrboard", async (t) => {
     const yb = plugin.createYarrboard("ff.local");
 
     plugin.pathScheme = "none";
-    assert.equal(yb.getConfigBoardPath(), "electrical.frothfet.config.ff", "none -> boardname");
+    assert.equal(yb.getConfigBoardPath(), "electrical.frothfet.ff.config", "none -> boardname");
 
     plugin.pathScheme = "boardname";
-    assert.equal(yb.getConfigBoardPath(), "electrical.frothfet.config.ff");
+    assert.equal(yb.getConfigBoardPath(), "electrical.frothfet.ff.config");
 
     plugin.pathScheme = "uuid";
-    assert.equal(yb.getConfigBoardPath(), "electrical.frothfet.config.ff", "no config yet -> boardname fallback");
+    assert.equal(yb.getConfigBoardPath(), "electrical.frothfet.ff.config", "no config yet -> boardname fallback");
     yb.handleConfig(configMessage([], { uuid: "abcd-1234" }));
-    assert.equal(yb.getConfigBoardPath(), "electrical.frothfet.config.abcd-1234", "uuid once config arrives");
+    assert.equal(yb.getConfigBoardPath(), "electrical.frothfet.abcd-1234.config", "uuid once config arrives");
   });
 
   await t.test("board config whitelist publishes settings and never leaks secrets", () => {
@@ -289,7 +292,7 @@ test("createYarrboard", async (t) => {
       },
     });
 
-    const cfg = collectDeltas(app)["electrical.frothfet.config.ff"];
+    const cfg = collectDeltas(app)["electrical.frothfet.ff.config"];
 
     // Whitelisted settings and integration flags are included.
     assert.equal(cfg.schema_version, 2);
@@ -325,17 +328,21 @@ test("createYarrboard", async (t) => {
     yb.handleUpdate({ pwm: [{ id: 1, key: "nav-lights", state: "ON" }] });
 
     const d = collectDeltas(app);
-    // Live telemetry has no board segment under "none".
+    // Channel telemetry has no board segment under "none" — it's the only path
+    // that collapses to the flat shared namespace.
     assert.equal(d["electrical.frothfet.channel.nav-lights.state"], "ON");
     assert.equal(d["electrical.frothfet.ff.channel.nav-lights.state"], undefined);
 
     // The config object is always per-board (boardname under "none").
-    const cfg = d["electrical.frothfet.config.ff"];
+    const cfg = d["electrical.frothfet.ff.config"];
     assert.equal(cfg.name, "My Frothfet");
     assert.equal(cfg.channels["nav-lights"].name, "Nav Lights");
 
-    // The control PUT handler is registered on the un-namespaced path.
-    assert.equal(app.putHandlers[0].path, "electrical.frothfet.control");
+    // Under "none" the per-board control path still carries a board segment, and
+    // the shared router lives on the flat, un-namespaced path.
+    const paths = app.putHandlers.map((h) => h.path);
+    assert.ok(paths.includes("electrical.frothfet.ff.control"), "per-board control path");
+    assert.ok(paths.includes("electrical.frothfet.control"), "shared control router path");
   });
 
   await t.test("only enabled channels are published", () => {
@@ -459,11 +466,13 @@ test("createYarrboard", async (t) => {
     const d = collectDeltas(app);
     const m = collectMetas(app);
 
-    // Under "none" the boardname is inserted so multiple boards don't collide.
-    assert.equal(d["electrical.frothfet.board.ff.bus_voltage"], 13.2);
-    assert.equal(d["electrical.frothfet.board.ff.uptime"], 5); // us -> s (round)
-    assert.equal(m["electrical.frothfet.board.ff.bus_voltage"].units, "V");
-    // The un-segmented path is no longer used.
+    // Board telemetry hangs off the same per-board root under every scheme:
+    // electrical.frothfet.{boardname}.board.* under "none".
+    assert.equal(d["electrical.frothfet.ff.board.bus_voltage"], 13.2);
+    assert.equal(d["electrical.frothfet.ff.board.uptime"], 5); // us -> s (round)
+    assert.equal(m["electrical.frothfet.ff.board.bus_voltage"].units, "V");
+    // The old flat/un-namespaced telemetry paths are no longer used.
+    assert.equal(d["electrical.frothfet.board.ff.bus_voltage"], undefined);
     assert.equal(d["electrical.frothfet.board.bus_voltage"], undefined);
   });
 
@@ -478,6 +487,91 @@ test("createYarrboard", async (t) => {
 
     assert.deepEqual(sent, { value: { cmd: "set_pwm", id: 0, state: true }, requireConfirmation: true });
     assert.deepEqual(result, { state: "COMPLETED", statusCode: 200 });
+  });
+});
+
+test("shared control router (electrical.frothfet.control)", async (t) => {
+  // Wire up boards the way start() would: create each connection, register it,
+  // and feed it a config so the key->board map is (re)built. Stubs `send` so we
+  // can see which board a routed command lands on.
+  function setupBoards(plugin, boards) {
+    for (const b of boards) {
+      const yb = plugin.createYarrboard(b.host);
+      yb.sent = [];
+      yb.send = (value, requireConfirmation) => yb.sent.push({ value, requireConfirmation });
+      plugin.connections.push(yb);
+      yb.handleConfig(configMessage(b.channels));
+      b.yb = yb;
+    }
+  }
+
+  await t.test("routes a keyed command to the board that owns the key", () => {
+    const plugin = createPlugin(createFakeApp());
+    const boards = [
+      { host: "ff1.local", channels: [{ id: 1, key: "pump-a", enabled: true }] },
+      { host: "ff2.local", channels: [{ id: 1, key: "light-b", enabled: true }] },
+    ];
+    setupBoards(plugin, boards);
+
+    const cmd = { cmd: "set_pwm", key: "light-b", state: true };
+    const result = plugin.handleControlPut("vessels.self", "electrical.frothfet.control", cmd);
+
+    assert.deepEqual(result, { state: "COMPLETED", statusCode: 200 });
+    assert.equal(boards[0].yb.sent.length, 0, "board without the key is untouched");
+    assert.deepEqual(boards[1].yb.sent, [{ value: cmd, requireConfirmation: true }]);
+  });
+
+  await t.test("rejects a payload with no key (unroutable)", () => {
+    const plugin = createPlugin(createFakeApp());
+    const boards = [{ host: "ff1.local", channels: [{ id: 1, key: "pump-a", enabled: true }] }];
+    setupBoards(plugin, boards);
+
+    const result = plugin.handleControlPut("vessels.self", "electrical.frothfet.control", { cmd: "set_pwm", state: true });
+
+    assert.equal(result.state, "COMPLETED");
+    assert.equal(result.statusCode, 400);
+    assert.equal(boards[0].yb.sent.length, 0, "nothing is forwarded");
+  });
+
+  await t.test("rejects an unknown key", () => {
+    const plugin = createPlugin(createFakeApp());
+    const boards = [{ host: "ff1.local", channels: [{ id: 1, key: "pump-a", enabled: true }] }];
+    setupBoards(plugin, boards);
+
+    const result = plugin.handleControlPut("vessels.self", "electrical.frothfet.control", { cmd: "set_pwm", key: "nope", state: true });
+
+    assert.equal(result.statusCode, 400);
+    assert.equal(boards[0].yb.sent.length, 0);
+  });
+
+  await t.test("duplicate keys across boards raise a plugin error under \"none\"", () => {
+    const app = createFakeApp();
+    const plugin = createPlugin(app); // pathScheme defaults to "none"
+    const boards = [
+      { host: "ff1.local", channels: [{ id: 1, key: "pump", enabled: true }] },
+      { host: "ff2.local", channels: [{ id: 1, key: "pump", enabled: true }] },
+    ];
+    setupBoards(plugin, boards);
+
+    assert.ok(
+      app.pluginErrors.some((e) => e.includes("pump") && e.includes("ff1") && e.includes("ff2")),
+      "collision is reported with the conflicting key and boards",
+    );
+    // The first board to claim the key wins the map, so routing stays deterministic.
+    assert.equal(plugin.channelKeyToBoard["pump"], boards[0].yb);
+  });
+
+  await t.test("duplicate keys are tolerated under a namespaced scheme", () => {
+    const app = createFakeApp();
+    const plugin = createPlugin(app);
+    plugin.pathScheme = "boardname";
+    const boards = [
+      { host: "ff1.local", channels: [{ id: 1, key: "pump", enabled: true }] },
+      { host: "ff2.local", channels: [{ id: 1, key: "pump", enabled: true }] },
+    ];
+    setupBoards(plugin, boards);
+
+    assert.equal(app.pluginErrors.length, 0, "no collision error under namespaced schemes");
   });
 });
 

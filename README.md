@@ -6,19 +6,27 @@ SignalK plugin for interfacing with [FrothFET](https://github.com/hoeken/frothfe
 
 Add your board hosts and configure login info in the plugin preferences.
 
-**Path scheme** (top-level option) controls how board paths are namespaced under
-`electrical.frothfet`:
+**Path scheme** (top-level option) controls how each board's **channel
+telemetry** is namespaced under `electrical.frothfet`:
 
-| Scheme      | Default | Paths                                        |
-| ----------- | ------- | -------------------------------------------- |
-| `none`      | ✓       | `electrical.frothfet.{channels}`             |
-| `boardname` |         | `electrical.frothfet.{boardname}.{channels}` |
-| `uuid`      |         | `electrical.frothfet.{uuid}.{channels}`      |
+| Scheme      | Default | Channel telemetry                               |
+| ----------- | ------- | ----------------------------------------------- |
+| `none`      | ✓       | `electrical.frothfet.channel.{key}`             |
+| `boardname` |         | `electrical.frothfet.{boardname}.channel.{key}` |
+| `uuid`      |         | `electrical.frothfet.{uuid}.channel.{key}`      |
 
-`none` collapses every board into one flat namespace — convenient for automation
-and scripting, since channels are addressed by their slug regardless of which
-board they're on. `boardname` and `uuid` give each board its own namespace
-(`uuid` survives a hostname change).
+`none` collapses every board's channels into one flat namespace — convenient for
+automation and scripting, since a channel is addressed by its slug regardless of
+which board it's on (channel keys must therefore be unique across boards).
+`boardname` and `uuid` give each board its own channel subtree (`uuid` survives a
+hostname change).
+
+Everything **else** a board publishes — its [config object](#signalk-path-info),
+[board telemetry](#board-telemetry) and [per-board control](#control) — always
+lives under a **per-board root**, `electrical.frothfet.{name|uuid}`, where
+`{name|uuid}` is the boardname (`none`/`boardname` schemes) or the uuid (`uuid`
+scheme). That root always carries a board segment, even under `none`, so boards
+never collide.
 
 Per-board options:
 
@@ -35,11 +43,23 @@ Per-board options:
 
 ## Control
 
-The plugin registers a SignalK PUT handler per board:
+The value PUT to a control path is passed as raw JSON straight to the board's
+websocket. See the [protocol documentation](https://github.com/hoeken/yarrboard#protocol)
+for the message format; commands address a channel by either its numeric `id` or
+its `key` slug. Login and auth are handled for you by SignalK.
 
-- `{board}.control` — the value is passed as raw JSON straight to the board's websocket. See the [protocol documentation](https://github.com/hoeken/yarrboard#protocol) for the message format. Login and auth are handled for you by SignalK.
+There are two ways to send a command:
 
-`{board}` is the namespace root chosen by the [path scheme](#setup): `electrical.frothfet`, `electrical.frothfet.{boardname}`, or `electrical.frothfet.{uuid}`.
+- **Per-board** — `electrical.frothfet.{name|uuid}.control`, on the board's own
+  [per-board root](#setup). The payload is forwarded verbatim to that board.
+  Available under every path scheme.
+- **Shared router** — `electrical.frothfet.control` (always available, any path
+  scheme). The payload **must** include a channel `key`; the plugin looks up the
+  board that owns that key and forwards the command to it. A payload with no
+  `key`, or a key no board owns, is rejected. Under the `none` scheme channel
+  keys must be unique across all boards for routing to be unambiguous — a
+  duplicate raises a plugin error. Under the namespaced schemes the router is an
+  opt-in convenience for setups whose keys happen to be unique.
 
 ## Remote access (reverse proxy)
 
@@ -72,23 +92,34 @@ to the SignalK host.
 
 ## SignalK Path Info
 
-Data is split into two subtrees:
+Every path a board publishes hangs off its **per-board root**,
+`electrical.frothfet.{name|uuid}`, where `{name|uuid}` is the boardname
+(`none`/`boardname` schemes) or the uuid (`uuid` scheme). The boardname is the
+hostname without the `.local` suffix (defaults to `frothfet`); the uuid survives
+a hostname change.
 
-- **Live telemetry** hangs off `{board}`, the namespace root set by the
-  [path scheme](#setup): `electrical.frothfet` (`none`),
-  `electrical.frothfet.{boardname}` (`boardname`), or `electrical.frothfet.{uuid}`
-  (`uuid`). `{boardname}` is the board hostname without the `.local` suffix
-  (defaults to `frothfet`).
-- **Static config** is the canonical reference for values that rarely change
-  (firmware, names, settings). The whole thing is published as a *single JSON
-  object* at `electrical.frothfet.config.{board}`, always per-board so it stays
-  unambiguous even under the flat `none` scheme. `{board}` here is the `uuid`
-  when that scheme is selected, otherwise the boardname.
+| Subtree              | Path                                              |
+| -------------------- | ------------------------------------------------- |
+| Static config object | `electrical.frothfet.{name/uuid}.config`          |
+| Board telemetry      | `electrical.frothfet.{name/uuid}.board.*`         |
+| Channel telemetry    | `electrical.frothfet.{name/uuid}.channel.{key}.*` |
+| Per-board control    | `electrical.frothfet.{name/uuid}.control`         |
 
-Only whitelisted fields are included: secrets (WiFi/MQTT/auth passwords, TLS
-certs, keys) and trivia (boot log, channel melodies) are never sent to SignalK.
+(`{name/uuid}` is the `{name|uuid}` per-board segment — written with a slash only
+to keep the table readable.)
 
-### Board + channel config object (`electrical.frothfet.config.{board}`)
+The one exception is **channel telemetry under the `none` scheme**: it drops the
+board segment and collapses into the flat shared namespace
+`electrical.frothfet.channel.{key}.*` (see [path scheme](#setup)). Config, board
+telemetry and control keep their board segment under every scheme.
+
+**Static config** is the canonical reference for values that rarely change
+(firmware, names, settings). The whole thing is published as a *single JSON
+object* — one delta, not a path per field. Only whitelisted fields are included:
+secrets (WiFi/MQTT/auth passwords, TLS certs, keys) and trivia (boot log, channel
+melodies) are never sent to SignalK.
+
+### Board + channel config object (`electrical.frothfet.{name|uuid}.config`)
 
 The value is one object. Board fields sit at the top level; enabled channels are
 nested under `channels`, keyed by the channel slug (e.g. `fresh-water-pump`,
@@ -113,7 +144,7 @@ falling back to the numeric id if no key is set):
   "navico_enabled": true,
   "channels": {
     "anchor-light": {
-      "id": 6,                      // channel id (used for control commands)
+      "id": 6,                      // channel id (either id or key works for control commands)
       "key": "anchor-light",
       "name": "Anchor Light",
       "type": "light",              // e.g. bilge_pump, water_pump, light
@@ -131,12 +162,8 @@ falling back to the numeric id if no key is set):
 
 ### Board telemetry
 
-Board-level live values always include a board segment so several boards never
-collide under the flat `none` scheme:
-
-- `none` → `electrical.frothfet.board.{boardname}.*`
-- `boardname` → `electrical.frothfet.{boardname}.board.*`
-- `uuid` → `electrical.frothfet.{uuid}.board.*`
+Board-level live values hang off the per-board root under every scheme, at
+`electrical.frothfet.{name|uuid}.board.*`:
 
 | Leaf          | Units | Description                               |
 | ------------- | ----- | ----------------------------------------- |
@@ -145,8 +172,10 @@ collide under the flat `none` scheme:
 
 ### PWM channel telemetry
 
-Live per-channel telemetry under `{board}.channel.{key}.*` (only enabled
-channels), where `{key}` is the same slug used in the config object above:
+Live per-channel telemetry (only enabled channels), where `{key}` is the same
+slug used in the config object above. Under `none` these are flat at
+`electrical.frothfet.channel.{key}.*`; under `boardname`/`uuid` they carry the
+board segment, `electrical.frothfet.{name|uuid}.channel.{key}.*`:
 
 | Path          | Units | Description                                             |
 | ------------- | ----- | ------------------------------------------------------- |

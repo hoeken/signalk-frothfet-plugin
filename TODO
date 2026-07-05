@@ -1,17 +1,12 @@
-v1.0.0
+# v1.0.0
 
-- [DONE] store config data
-  - all whitelisted config (board + channels) is one JSON object published at
-    electrical.frothfet.config.{board} (see buildConfig)
-  - board fields at top level; enabled channels nested under `channels`, keyed by slug
-  - config path is always per-board; under 'none' it falls back to boardname (see getConfigBoardPath)
-  - whitelists: plugin.boardConfigFields, plugin.channelConfigFields
-  - secrets (wifi/mqtt/auth pass, certs) and trivia (boot log, melodies) are excluded by the whitelist
-- control PUT routing under the "none" path scheme:
-  - all boards register a handler on the shared electrical.frothfet.control path
-  - a PUT is ambiguous about which board's websocket receives it (each handler
-    forwards to its own board)
-  - decide how to route: by board id/uuid in the payload, or some other scheme
+- move put handler to its own file
+- screenshots
+- readme check
+- update changelog
+
+# v1.1.0
+
 - n2k digital switching
   - figure out what plugin can go from signalk -> n2k for digital switching
   - find out what format it prefers for data

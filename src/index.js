@@ -12,16 +12,18 @@ module.exports = function (app) {
   plugin.bus = new SignalKBus(app, plugin.id);
   plugin.connections = [];
 
-  // How board paths are namespaced under `electrical.frothfet`. Set from the
-  // top-level `path_scheme` option in start(); see getMainBoardPath below.
-  //   "none"      -> electrical.frothfet.{channels}          (flat shared namespace)
-  //   "boardname" -> electrical.frothfet.{boardname}.{channels}
-  //   "uuid"      -> electrical.frothfet.{uuid}.{channels}
+  // How this board's CHANNEL telemetry is namespaced under `electrical.frothfet`.
+  // Set from the top-level `path_scheme` option in start(); see getMainBoardPath.
+  //   "none"      -> electrical.frothfet.channel.{key}            (flat shared namespace)
+  //   "boardname" -> electrical.frothfet.{boardname}.channel.{key}
+  //   "uuid"      -> electrical.frothfet.{uuid}.channel.{key}
+  // Per-board paths (config, board telemetry, control) always carry a board
+  // segment regardless of scheme — see getBoardNamespace.
   plugin.pathScheme = "none";
 
   // What the board reports splits into two buckets. Static setup values (board +
   // channels) are gathered into a single JSON object published at the per-board
-  // config path (electrical.frothfet.config.{board}); live telemetry is a delta
+  // config path (electrical.frothfet.{name|uuid}.config); live telemetry is a delta
   // per field under the main data path (see getMainBoardPath / getConfigBoardPath).
   //
   // Both are whitelisted: only the fields listed below are included, which keeps
@@ -91,10 +93,83 @@ module.exports = function (app) {
     return out;
   };
 
+  // (Re)build the channel-key -> board map used by the shared control router.
+  // Rebuilt on every config load (from handleConfig) so it tracks boards being
+  // (re)configured. The board firmware routes on `key`, so all we need is the
+  // owning connection; the raw payload is forwarded unchanged.
+  //
+  // Under the flat "none" scheme a duplicate key across boards is unroutable, so
+  // we surface it as a plugin error. Namespaced schemes keep the router as an
+  // opt-in convenience for users with unique keys, so collisions aren't enforced
+  // (the first board to claim a key wins).
+  plugin.rebuildControlMap = function () {
+    const map = {};
+    const collisions = {};
+
+    for (const yb of plugin.connections) {
+      const channels = (yb.config && yb.config.pwm && yb.config.pwm.channels) || [];
+      for (const ch of channels) {
+        const cfg = yb.getChannelConfig(ch.id);
+        if (!(cfg && cfg.enabled))
+          continue;
+
+        const key = String(yb.channelSegment(cfg, ch));
+        if (map[key] && map[key] !== yb) {
+          const boards = collisions[key] || (collisions[key] = [map[key].boardname]);
+          if (!boards.includes(yb.boardname))
+            boards.push(yb.boardname);
+        } else if (!map[key]) {
+          map[key] = yb;
+        }
+      }
+    }
+
+    plugin.channelKeyToBoard = map;
+
+    if (plugin.pathScheme === "none" && Object.keys(collisions).length) {
+      const detail = Object.entries(collisions)
+        .map(([key, boards]) => `"${key}" (${boards.join(", ")})`)
+        .join("; ");
+      app.setPluginError(
+        `Duplicate channel keys across boards under the "none" path scheme make control routing ambiguous: ${detail}. Give the channels unique keys or switch to the boardname/uuid path scheme.`,
+      );
+    }
+  };
+
+  // Shared control router at the flat electrical.frothfet.control path. The
+  // payload must carry a channel `key` (the only thing that identifies a board
+  // here); we look up the owning board and forward the raw command to it. A
+  // missing key or an unknown key is rejected — we have no way to route it.
+  plugin.handleControlPut = function (context, path, value, _callback) {
+    if (!value || typeof value !== "object" || Array.isArray(value) || value.key === undefined || value.key === null)
+      return {
+        state: "COMPLETED",
+        statusCode: 400,
+        message: "Control commands to electrical.frothfet.control must include a channel `key` to route to a board.",
+      };
+
+    const yb = plugin.channelKeyToBoard[String(value.key)];
+    if (!yb)
+      return {
+        state: "COMPLETED",
+        statusCode: 400,
+        message: `No board found for channel key "${value.key}". The board may be offline or its config not yet loaded.`,
+      };
+
+    yb.send(value, true);
+    return { state: "COMPLETED", statusCode: 200 };
+  };
+
   plugin.start = function (options, _restartPlugin) {
     app.debug(`YarrboardClient.version: ${YarrboardClient.version}`);
 
     plugin.pathScheme = options.path_scheme || "none";
+
+    // Control-routing state, reset on each start(). The shared router at
+    // electrical.frothfet.control is registered once after the first config
+    // arrives (see handleConfig); the map is (re)built on every config load.
+    plugin.channelKeyToBoard = {};
+    plugin.metaHandlerRegistered = false;
 
     const descriptors = [];
 
@@ -128,10 +203,29 @@ module.exports = function (app) {
 
     plugin.boardProxies = new BoardProxyManager(app);
     plugin.boardProxies.start(descriptors);
+
+    // Boards can be reconfigured from their own web UI; reload every board's
+    // config hourly so the published config object and the control key->board
+    // map stay current without needing a plugin restart.
+    plugin.configReloadTimer = setInterval(() => {
+      for (const yb of plugin.connections) {
+        if (yb.isOpen())
+          yb.getConfig();
+      }
+    }, 60 * 60 * 1000);
+    // Don't let this timer keep the Node process alive on its own; SignalK's own
+    // server holds the event loop open, so the interval still fires.
+    if (plugin.configReloadTimer.unref)
+      plugin.configReloadTimer.unref();
   };
 
   plugin.stop = function () {
     app.debug("Plugin stopped");
+
+    if (plugin.configReloadTimer) {
+      clearInterval(plugin.configReloadTimer);
+      plugin.configReloadTimer = null;
+    }
 
     for (const yb of plugin.connections)
       yb.close();
@@ -159,12 +253,12 @@ module.exports = function (app) {
         type: "string",
         title: "SignalK path scheme",
         description:
-          "How board paths are namespaced under electrical.frothfet. \"None\" publishes every board into one flat namespace (electrical.frothfet.…) — convenient for automation and scripting, since channels are addressed by slug without tracking which board owns them. \"Board name\" and \"Board UUID\" give each board its own namespace.",
+          "How each board's channel telemetry is namespaced under electrical.frothfet. \"None\" publishes every board's channels into one flat namespace (electrical.frothfet.channel.{key}) — convenient for automation and scripting, since a channel is addressed by slug without tracking which board owns it (keys must be unique across boards). \"Board name\" and \"Board UUID\" give each board its own channel subtree. Per-board paths (config, board telemetry, control) always carry a board segment regardless of scheme.",
         enum: ["none", "boardname", "uuid"],
         enumNames: [
-          "None — electrical.frothfet.{channels}",
-          "Board hostname — electrical.frothfet.{boardname}.{channels}",
-          "Board UUID — electrical.frothfet.{uuid}.{channels}",
+          "None — electrical.frothfet.channel.{key} (flat)",
+          "Board hostname — electrical.frothfet.{boardname}.channel.{key}",
+          "Board UUID — electrical.frothfet.{uuid}.channel.{key}",
         ],
         default: "none",
       },
@@ -330,16 +424,29 @@ module.exports = function (app) {
       // `capabilities`, `status`, `msgid`); everything below lives under it.
       this.config = data.config || {};
 
-      let mainPath = this.getMainBoardPath();
       let boardPath = this.getBoardPath();
       let configPath = this.getConfigBoardPath();
 
-      // Passing raw JSON to the board's websocket lets the FrothFET web protocol
-      // be driven straight from SignalK PUTs. Register once per connection.
+      // Per-board control: a raw-JSON PUT to this board's own control path is
+      // forwarded straight to its websocket (FrothFET web protocol). It lives at
+      // the per-board namespace root (electrical.frothfet.{boardname|uuid}.control)
+      // so boards never collide, even under the flat "none" scheme. Register once
+      // per connection.
       if (!this.putHandlerRegistered) {
-        app.registerPutHandler("vessels.self", `${mainPath}.control`, this.doSendJSON.bind(this));
+        app.registerPutHandler("vessels.self", `${this.getBoardNamespace()}.control`, this.doSendJSON.bind(this));
         this.putHandlerRegistered = true;
       }
+
+      // Shared control router at the flat electrical.frothfet.control path,
+      // registered once after the first config (regardless of path scheme). It
+      // routes a PUT to whichever board owns the channel `key` in the payload.
+      if (!plugin.metaHandlerRegistered) {
+        app.registerPutHandler("vessels.self", "electrical.frothfet.control", plugin.handleControlPut);
+        plugin.metaHandlerRegistered = true;
+      }
+
+      // Refresh the key->board routing map now that this board's config is set.
+      plugin.rebuildControlMap();
 
       // Static board + channel config is the canonical reference, published as a
       // single JSON object at the per-board config path (one delta, not a path
@@ -379,47 +486,54 @@ module.exports = function (app) {
       this.bus.sendUpdates();
     };
 
-    // Root path all of this board's deltas hang off of. The namespacing is
-    // controlled by the top-level `path_scheme` option (plugin.pathScheme):
-    //   "boardname" -> electrical.frothfet.{boardname} (hostname sans .local)
-    //   "uuid"      -> electrical.frothfet.{uuid}       (from the board config)
-    //   "none"      -> electrical.frothfet              (flat shared namespace; default)
-    // The uuid only exists once the board's config has arrived, so fall back to
-    // the hostname-derived boardname until then to keep the path stable/valid.
-    yb.getMainBoardPath = function () {
-      const base = "electrical.frothfet";
-      switch (plugin.pathScheme) {
-        case "boardname":
-          return `${base}.${this.boardname}`;
-        case "uuid": {
-          const uuid = this.config && this.config.network && this.config.network.uuid;
-          return `${base}.${uuid || this.boardname}`;
-        }
-        default:
-          return base;
-      }
-    };
-
-    // Prefix for this board's live board-level telemetry (uptime, bus_voltage).
-    // These are per-board scalars, so under the flat "none" scheme we insert the
-    // boardname to keep multiple boards from colliding; the namespaced schemes
-    // already carry a board segment via getMainBoardPath().
-    yb.getBoardPath = function () {
-      if (plugin.pathScheme === "none")
-        return `${this.getMainBoardPath()}.board.${this.boardname}`;
-      return `${this.getMainBoardPath()}.board`;
-    };
-
-    // Root path for this board's static config. Config is always per-board (so
-    // it stays unambiguous even under the flat "none" scheme), keyed by uuid
-    // when that scheme is selected and the uuid is known, else by boardname.
-    yb.getConfigBoardPath = function () {
-      const base = "electrical.frothfet.config";
+    // The board discriminator segment used to namespace this board's per-board
+    // paths: the hostname-derived boardname for the "none"/"boardname" schemes,
+    // the board uuid for the "uuid" scheme. The uuid only exists once the
+    // board's config has arrived, so fall back to the boardname until then to
+    // keep the path stable/valid.
+    yb.boardSegment = function () {
       if (plugin.pathScheme === "uuid") {
         const uuid = this.config && this.config.network && this.config.network.uuid;
-        return `${base}.${uuid || this.boardname}`;
+        return uuid || this.boardname;
       }
-      return `${base}.${this.boardname}`;
+      return this.boardname;
+    };
+
+    // Per-board namespace root: electrical.frothfet.{boardname|uuid}. Every
+    // per-board path hangs off this — the config object (.config), board-level
+    // telemetry (.board.*) and the per-board control PUT (.control) — so a
+    // board's whole subtree is laid out identically under all three path
+    // schemes. It always carries a board segment (even under "none") so boards
+    // never collide; only channel telemetry drops the segment under "none"
+    // (see getMainBoardPath).
+    yb.getBoardNamespace = function () {
+      return `electrical.frothfet.${this.boardSegment()}`;
+    };
+
+    // Root that this board's channel telemetry hangs off. Set by the top-level
+    // `path_scheme` option (plugin.pathScheme):
+    //   "none"      -> electrical.frothfet         (flat shared namespace; default)
+    //   "boardname" -> electrical.frothfet.{boardname}
+    //   "uuid"      -> electrical.frothfet.{uuid}
+    // Under "none" channels collapse into one flat namespace addressed by slug,
+    // regardless of which board owns them; the namespaced schemes give each
+    // board its own subtree, matching getBoardNamespace().
+    yb.getMainBoardPath = function () {
+      if (plugin.pathScheme === "none")
+        return "electrical.frothfet";
+      return this.getBoardNamespace();
+    };
+
+    // Prefix for this board's live board-level telemetry (uptime, bus_voltage):
+    // electrical.frothfet.{boardname|uuid}.board.
+    yb.getBoardPath = function () {
+      return `${this.getBoardNamespace()}.board`;
+    };
+
+    // Path for this board's static config object:
+    // electrical.frothfet.{boardname|uuid}.config.
+    yb.getConfigBoardPath = function () {
+      return `${this.getBoardNamespace()}.config`;
     };
 
     // PUT handler: forward the raw JSON value straight to the board's websocket.
