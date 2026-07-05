@@ -1,7 +1,7 @@
 {
   "name": "signalk-frothfet-plugin",
   "version": "1.0.0",
-  "description": "SignalK plugin for the Frothfet multi-channel digital load controller.  Data, control, and remote access.",
+  "description": "Open hardware multi-channel digital load controller.  Data in, control, and remote access.",
   "main": "src/index.js",
   "files": [
     "src/",

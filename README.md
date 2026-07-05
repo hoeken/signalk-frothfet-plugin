@@ -1,6 +1,6 @@
 # signalk-frothfet-plugin
 
-SignalK plugin for interfacing with [FrothFET](https://github.com/hoeken/frothfet) multi-channel digital load controllers.  Data, control, and — now — remote access to each board's web UI via Tailscale or another VPN.
+SignalK plugin for interfacing with [FrothFET](https://frothfet.com) multi-channel digital load controllers.  Data, control, and remote access to each board's web UI via Tailscale or another VPN.
 
 ## Setup
 
@@ -44,7 +44,7 @@ Per-board options:
 ## Control
 
 The value PUT to a control path is passed as raw JSON straight to the board's
-websocket. See the [protocol documentation](https://github.com/hoeken/yarrboard#protocol)
+websocket. See the [protocol documentation](https://frothfet.com/docs/software/api.html)
 for the message format; commands address a channel by either its numeric `id` or
 its `key` slug. Login and auth are handled for you by SignalK.
 
