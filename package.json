@@ -5,7 +5,8 @@
   "main": "src/index.js",
   "files": [
     "src/",
-    "public/"
+    "public/",
+    "docs/screenshots/"
   ],
   "scripts": {
     "test": "node --test test/*.test.js",
@@ -31,7 +32,11 @@
   ],
   "signalk": {
     "displayName": "Frothfet",
-    "appIcon": "logo.png"
+    "appIcon": "logo.png",
+    "screenshots": [
+      "./docs/screenshots/chooser.png",
+      "./docs/screenshots/frothfet.png"
+    ]
   },
   "author": "Zach Hoeken",
   "license": "ISC",
