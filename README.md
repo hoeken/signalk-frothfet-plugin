@@ -213,7 +213,7 @@ cover:
   message routing, the PWM channel publishing (only enabled channels, key-based
   paths, id-based config matching, aH→C / wH→J / °C→K conversion), and the
   control PUT handler. No board connection is opened.
-- **`signalk-board-proxy.js`** — descriptor filtering (enable/port/duplicate),
+- **`board-proxy.js`** — descriptor filtering (enable/port/duplicate),
   target URL building, and the `/boards` metadata. `ReverseProxy` is stubbed so
   no ports are opened.
 - **`reverse-proxy.js`** — real HTTP and WebSocket proxying over loopback
