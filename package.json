@@ -41,7 +41,7 @@
   "homepage": "https://github.com/hoeken/signalk-frothfet-plugin#readme",
   "dependencies": {
     "http-proxy": "^1.18.1",
-    "yarrboard-client": "^1.4.1"
+    "yarrboard-client": "^1.5.0"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
