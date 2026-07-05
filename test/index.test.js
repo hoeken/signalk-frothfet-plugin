@@ -476,14 +476,17 @@ test("createYarrboard", async (t) => {
     assert.equal(d["electrical.frothfet.board.bus_voltage"], undefined);
   });
 
-  await t.test("doSendJSON forwards the raw value to the board websocket", () => {
-    const plugin = createPlugin(createFakeApp());
+  await t.test("the per-board control handler forwards the raw value to the board websocket", () => {
+    const app = createFakeApp();
+    const plugin = createPlugin(app);
     const yb = plugin.createYarrboard("ff.local");
 
     let sent;
     yb.send = (value, requireConfirmation) => (sent = { value, requireConfirmation });
 
-    const result = yb.doSendJSON("vessels.self", "electrical.frothfet.ff.control", { cmd: "set_pwm", id: 0, state: true });
+    plugin.controlRouter.registerBoard(yb);
+    const handler = app.putHandlers.find((h) => h.path === "electrical.frothfet.ff.control").handler;
+    const result = handler("vessels.self", "electrical.frothfet.ff.control", { cmd: "set_pwm", id: 0, state: true });
 
     assert.deepEqual(sent, { value: { cmd: "set_pwm", id: 0, state: true }, requireConfirmation: true });
     assert.deepEqual(result, { state: "COMPLETED", statusCode: 200 });
@@ -514,7 +517,7 @@ test("shared control router (electrical.frothfet.control)", async (t) => {
     setupBoards(plugin, boards);
 
     const cmd = { cmd: "set_pwm", key: "light-b", state: true };
-    const result = plugin.handleControlPut("vessels.self", "electrical.frothfet.control", cmd);
+    const result = plugin.controlRouter.handleControlPut("vessels.self", "electrical.frothfet.control", cmd);
 
     assert.deepEqual(result, { state: "COMPLETED", statusCode: 200 });
     assert.equal(boards[0].yb.sent.length, 0, "board without the key is untouched");
@@ -526,7 +529,7 @@ test("shared control router (electrical.frothfet.control)", async (t) => {
     const boards = [{ host: "ff1.local", channels: [{ id: 1, key: "pump-a", enabled: true }] }];
     setupBoards(plugin, boards);
 
-    const result = plugin.handleControlPut("vessels.self", "electrical.frothfet.control", { cmd: "set_pwm", state: true });
+    const result = plugin.controlRouter.handleControlPut("vessels.self", "electrical.frothfet.control", { cmd: "set_pwm", state: true });
 
     assert.equal(result.state, "COMPLETED");
     assert.equal(result.statusCode, 400);
@@ -538,7 +541,7 @@ test("shared control router (electrical.frothfet.control)", async (t) => {
     const boards = [{ host: "ff1.local", channels: [{ id: 1, key: "pump-a", enabled: true }] }];
     setupBoards(plugin, boards);
 
-    const result = plugin.handleControlPut("vessels.self", "electrical.frothfet.control", { cmd: "set_pwm", key: "nope", state: true });
+    const result = plugin.controlRouter.handleControlPut("vessels.self", "electrical.frothfet.control", { cmd: "set_pwm", key: "nope", state: true });
 
     assert.equal(result.statusCode, 400);
     assert.equal(boards[0].yb.sent.length, 0);
@@ -558,7 +561,7 @@ test("shared control router (electrical.frothfet.control)", async (t) => {
       "collision is reported with the conflicting key and boards",
     );
     // The first board to claim the key wins the map, so routing stays deterministic.
-    assert.equal(plugin.channelKeyToBoard["pump"], boards[0].yb);
+    assert.equal(plugin.controlRouter.channelKeyToBoard["pump"], boards[0].yb);
   });
 
   await t.test("duplicate keys are tolerated under a namespaced scheme", () => {

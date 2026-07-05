@@ -1,6 +1,7 @@
 const YarrboardClient = require("yarrboard-client");
 const { SignalKBus } = require("./signalk-bus.js");
 const { BoardProxyManager } = require("./signalk-board-proxy.js");
+const { ControlRouter } = require("./control-router.js");
 
 module.exports = function (app) {
   var plugin = {};
@@ -20,6 +21,13 @@ module.exports = function (app) {
   // Per-board paths (config, board telemetry, control) always carry a board
   // segment regardless of scheme — see getBoardNamespace.
   plugin.pathScheme = "none";
+
+  // Owns the control PUT surfaces (per-board path + shared router) and the
+  // channel-key -> board routing map. Handlers register lazily as each board's
+  // config arrives (see handleConfig); start() swaps in a fresh instance so a
+  // restart re-registers cleanly. Reads plugin.pathScheme via getter since it's
+  // set later, in start().
+  plugin.controlRouter = new ControlRouter(app, () => plugin.pathScheme);
 
   // What the board reports splits into two buckets. Static setup values (board +
   // channels) are gathered into a single JSON object published at the per-board
@@ -93,83 +101,15 @@ module.exports = function (app) {
     return out;
   };
 
-  // (Re)build the channel-key -> board map used by the shared control router.
-  // Rebuilt on every config load (from handleConfig) so it tracks boards being
-  // (re)configured. The board firmware routes on `key`, so all we need is the
-  // owning connection; the raw payload is forwarded unchanged.
-  //
-  // Under the flat "none" scheme a duplicate key across boards is unroutable, so
-  // we surface it as a plugin error. Namespaced schemes keep the router as an
-  // opt-in convenience for users with unique keys, so collisions aren't enforced
-  // (the first board to claim a key wins).
-  plugin.rebuildControlMap = function () {
-    const map = {};
-    const collisions = {};
-
-    for (const yb of plugin.connections) {
-      const channels = (yb.config && yb.config.pwm && yb.config.pwm.channels) || [];
-      for (const ch of channels) {
-        const cfg = yb.getChannelConfig(ch.id);
-        if (!(cfg && cfg.enabled))
-          continue;
-
-        const key = String(yb.channelSegment(cfg, ch));
-        if (map[key] && map[key] !== yb) {
-          const boards = collisions[key] || (collisions[key] = [map[key].boardname]);
-          if (!boards.includes(yb.boardname))
-            boards.push(yb.boardname);
-        } else if (!map[key]) {
-          map[key] = yb;
-        }
-      }
-    }
-
-    plugin.channelKeyToBoard = map;
-
-    if (plugin.pathScheme === "none" && Object.keys(collisions).length) {
-      const detail = Object.entries(collisions)
-        .map(([key, boards]) => `"${key}" (${boards.join(", ")})`)
-        .join("; ");
-      app.setPluginError(
-        `Duplicate channel keys across boards under the "none" path scheme make control routing ambiguous: ${detail}. Give the channels unique keys or switch to the boardname/uuid path scheme.`,
-      );
-    }
-  };
-
-  // Shared control router at the flat electrical.frothfet.control path. The
-  // payload must carry a channel `key` (the only thing that identifies a board
-  // here); we look up the owning board and forward the raw command to it. A
-  // missing key or an unknown key is rejected — we have no way to route it.
-  plugin.handleControlPut = function (context, path, value, _callback) {
-    if (!value || typeof value !== "object" || Array.isArray(value) || value.key === undefined || value.key === null)
-      return {
-        state: "COMPLETED",
-        statusCode: 400,
-        message: "Control commands to electrical.frothfet.control must include a channel `key` to route to a board.",
-      };
-
-    const yb = plugin.channelKeyToBoard[String(value.key)];
-    if (!yb)
-      return {
-        state: "COMPLETED",
-        statusCode: 400,
-        message: `No board found for channel key "${value.key}". The board may be offline or its config not yet loaded.`,
-      };
-
-    yb.send(value, true);
-    return { state: "COMPLETED", statusCode: 200 };
-  };
-
   plugin.start = function (options, _restartPlugin) {
     app.debug(`YarrboardClient.version: ${YarrboardClient.version}`);
 
     plugin.pathScheme = options.path_scheme || "none";
 
-    // Control-routing state, reset on each start(). The shared router at
-    // electrical.frothfet.control is registered once after the first config
-    // arrives (see handleConfig); the map is (re)built on every config load.
-    plugin.channelKeyToBoard = {};
-    plugin.metaHandlerRegistered = false;
+    // Fresh control router on each start() so a restart re-registers its PUT
+    // handlers and rebuilds the routing map from scratch. Handlers register
+    // lazily as each board's config arrives (see handleConfig).
+    plugin.controlRouter = new ControlRouter(app, () => plugin.pathScheme);
 
     const descriptors = [];
 
@@ -322,7 +262,6 @@ module.exports = function (app) {
     var yb = new YarrboardClient(hostname, username, password, require_login, use_ssl);
     yb.bus = plugin.bus;
     yb.update_interval = update_interval;
-    yb.putHandlerRegistered = false;
 
     yb.onmessage = function (data) {
       if (data.msg == "update")
@@ -427,26 +366,12 @@ module.exports = function (app) {
       let boardPath = this.getBoardPath();
       let configPath = this.getConfigBoardPath();
 
-      // Per-board control: a raw-JSON PUT to this board's own control path is
-      // forwarded straight to its websocket (FrothFET web protocol). It lives at
-      // the per-board namespace root (electrical.frothfet.{boardname|uuid}.control)
-      // so boards never collide, even under the flat "none" scheme. Register once
-      // per connection.
-      if (!this.putHandlerRegistered) {
-        app.registerPutHandler("vessels.self", `${this.getBoardNamespace()}.control`, this.doSendJSON.bind(this));
-        this.putHandlerRegistered = true;
-      }
-
-      // Shared control router at the flat electrical.frothfet.control path,
-      // registered once after the first config (regardless of path scheme). It
-      // routes a PUT to whichever board owns the channel `key` in the payload.
-      if (!plugin.metaHandlerRegistered) {
-        app.registerPutHandler("vessels.self", "electrical.frothfet.control", plugin.handleControlPut);
-        plugin.metaHandlerRegistered = true;
-      }
-
-      // Refresh the key->board routing map now that this board's config is set.
-      plugin.rebuildControlMap();
+      // Control surfaces: this board's own control path plus the shared router.
+      // Both registrations are idempotent, and the key->board routing map is
+      // rebuilt now that this board's config is set. See ControlRouter.
+      plugin.controlRouter.registerBoard(this);
+      plugin.controlRouter.registerShared();
+      plugin.controlRouter.rebuild(plugin.connections);
 
       // Static board + channel config is the canonical reference, published as a
       // single JSON object at the per-board config path (one delta, not a path
@@ -534,12 +459,6 @@ module.exports = function (app) {
     // electrical.frothfet.{boardname|uuid}.config.
     yb.getConfigBoardPath = function () {
       return `${this.getBoardNamespace()}.config`;
-    };
-
-    // PUT handler: forward the raw JSON value straight to the board's websocket.
-    yb.doSendJSON = function (context, path, value, _callback) {
-      this.send(value, true);
-      return { state: "COMPLETED", statusCode: 200 };
     };
 
     return yb;
