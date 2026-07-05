@@ -72,51 +72,93 @@ to the SignalK host.
 
 ## SignalK Path Info
 
-`{board}` below is the namespace root set by the [path scheme](#setup):
-`electrical.frothfet` (`none`), `electrical.frothfet.{boardname}` (`boardname`),
-or `electrical.frothfet.{uuid}` (`uuid`). `{boardname}` is the board hostname
-without the `.local` suffix (defaults to `frothfet`).
+Data is split into two subtrees:
 
-### Board info
+- **Live telemetry** hangs off `{board}`, the namespace root set by the
+  [path scheme](#setup): `electrical.frothfet` (`none`),
+  `electrical.frothfet.{boardname}` (`boardname`), or `electrical.frothfet.{uuid}`
+  (`uuid`). `{boardname}` is the board hostname without the `.local` suffix
+  (defaults to `frothfet`).
+- **Static config** is the canonical reference for values that rarely change
+  (firmware, names, settings). The whole thing is published as a *single JSON
+  object* at `electrical.frothfet.config.{board}`, always per-board so it stays
+  unambiguous even under the flat `none` scheme. `{board}` here is the `uuid`
+  when that scheme is selected, otherwise the boardname.
 
-| Path                              | Units | Description                               |
-| --------------------------------- | ----- | ----------------------------------------- |
-| `{board}.board.firmware_version`  |       | Firmware version                          |
-| `{board}.board.hardware_version`  |       | Hardware version                          |
-| `{board}.board.hostname`          |       | Local board hostname                      |
-| `{board}.board.name`              |       | User friendly name                        |
-| `{board}.board.uptime`            | s     | Controller uptime                         |
-| `{board}.board.use_ssl`           |       | Does the board use SSL?                   |
-| `{board}.board.uuid`              |       | Unique ID of the board                    |
-| `{board}.board.bus_voltage`       | V     | Supply voltage to the board (if reported) |
+Only whitelisted fields are included: secrets (WiFi/MQTT/auth passwords, TLS
+certs, keys) and trivia (boot log, channel melodies) are never sent to SignalK.
 
-### PWM channels
+### Board + channel config object (`electrical.frothfet.config.{board}`)
 
-Published per enabled channel under `{board}.channel.{key}.*`,
-where `{key}` is the channel's slug (e.g. `fresh-water-pump`), falling back to the
-numeric channel id if no key is set:
+The value is one object. Board fields sit at the top level; enabled channels are
+nested under `channels`, keyed by the channel slug (e.g. `fresh-water-pump`,
+falling back to the numeric id if no key is set):
 
-| Path           | Units | Description                                             |
-| -------------- | ----- | ------------------------------------------------------- |
-| `id`           |       | ID of each channel (used for control commands)          |
-| `key`          |       | User defined key (slug) of channel                      |
-| `name`         |       | User defined name of channel                            |
-| `type`         |       | Channel type (e.g. `bilge_pump`, `water_pump`)          |
-| `source`       |       | Source of last state change                             |
-| `enabled`      |       | Whether the channel is in use or should be ignored      |
-| `hasCurrent`   |       | Whether this channel has current monitoring             |
-| `softFuse`     | A     | Software defined fuse, in amps                          |
-| `softFuseType` |       | Soft-fuse trip behavior (e.g. `SLOW`, `FAST`)           |
-| `isDimmable`   |       | Whether the channel has dimming enabled                 |
-| `defaultState` |       | State the channel powers up in                          |
-| `state`        |       | Whether the channel is on or not                        |
-| `duty`         | ratio | Duty cycle as a ratio from 0 to 1                       |
-| `voltage`      | V     | Voltage of channel                                      |
-| `current`      | A     | Current of channel                                      |
-| `wattage`      | W     | Power draw of channel                                   |
-| `temperature`  | K     | Temperature of channel (°C + 273.15)                    |
-| `aH`           | C     | Consumed charge since board restart (amp-hours × 3600)  |
-| `wH`           | J     | Consumed energy since board restart (watt-hours × 3600) |
+```jsonc
+{
+  "name": "Miscellaneous",          // user friendly name
+  "uuid": "D056E904A7AC",           // unique ID of the board
+  "hostname": "frothfet-misc.local",
+  "firmware_version": "2.6.1",
+  "hardware_version": "FROTHFET_REV_F",
+  "build_time": "2026-06-13T21:47:01Z",
+  "schema_version": 2,              // config schema version
+  "brightness": 1,                  // LED brightness
+  "use_ssl": false,
+  "api_enabled": true,              // HTTP API enabled?
+  "serial_enabled": false,          // serial protocol enabled?
+  "ota_enabled": true,              // Arduino OTA updates enabled?
+  "mqtt_enabled": true,
+  "ha_integration_enabled": true,   // Home Assistant integration enabled?
+  "navico_enabled": true,
+  "channels": {
+    "anchor-light": {
+      "id": 6,                      // channel id (used for control commands)
+      "key": "anchor-light",
+      "name": "Anchor Light",
+      "type": "light",              // e.g. bilge_pump, water_pump, light
+      "enabled": true,
+      "hasPWM": false,              // hardware supports PWM?
+      "hasCurrent": true,           // current monitoring?
+      "isDimmable": false,
+      "softFuse": 3,                // software fuse, in amps
+      "softFuseType": "SLOW",       // trip behavior, e.g. SLOW, FAST
+      "defaultState": "OFF"         // state the channel powers up in
+    }
+  }
+}
+```
+
+### Board telemetry
+
+Board-level live values always include a board segment so several boards never
+collide under the flat `none` scheme:
+
+- `none` → `electrical.frothfet.board.{boardname}.*`
+- `boardname` → `electrical.frothfet.{boardname}.board.*`
+- `uuid` → `electrical.frothfet.{uuid}.board.*`
+
+| Leaf          | Units | Description                               |
+| ------------- | ----- | ----------------------------------------- |
+| `uptime`      | s     | Controller uptime                         |
+| `bus_voltage` | V     | Supply voltage to the board (if reported) |
+
+### PWM channel telemetry
+
+Live per-channel telemetry under `{board}.channel.{key}.*` (only enabled
+channels), where `{key}` is the same slug used in the config object above:
+
+| Path          | Units | Description                                             |
+| ------------- | ----- | ------------------------------------------------------- |
+| `state`       |       | Whether the channel is on or not                        |
+| `source`      |       | Source of last state change                             |
+| `duty`        | ratio | Duty cycle as a ratio from 0 to 1                       |
+| `voltage`     | V     | Voltage of channel                                      |
+| `current`     | A     | Current of channel                                      |
+| `wattage`     | W     | Power draw of channel                                   |
+| `temperature` | K     | Temperature of channel (°C + 273.15)                    |
+| `aH`          | C     | Consumed charge since board restart (amp-hours × 3600)  |
+| `wH`          | J     | Consumed energy since board restart (watt-hours × 3600) |
 
 > Amp-hours and watt-hours are converted to SignalK base units (Coulombs and
 > Joules), and channel temperature from Celsius to Kelvin, before publishing.

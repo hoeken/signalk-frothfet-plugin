@@ -19,26 +19,61 @@ module.exports = function (app) {
   //   "uuid"      -> electrical.frothfet.{uuid}.{channels}
   plugin.pathScheme = "none";
 
-  // Per-channel metadata for the PWM output channels. `scale` (multiply) and
-  // `offset` (add, applied after scale) convert the board's value into a SignalK
-  // base unit before it is published.
+  // What the board reports splits into two buckets. Static setup values (board +
+  // channels) are gathered into a single JSON object published at the per-board
+  // config path (electrical.frothfet.config.{board}); live telemetry is a delta
+  // per field under the main data path (see getMainBoardPath / getConfigBoardPath).
+  //
+  // Both are whitelisted: only the fields listed below are included, which keeps
+  // secrets (wifi/mqtt/auth passwords, certs) and trivia (boot log, channel
+  // melodies) out of SignalK.
+
+  // Board-level config fields for the config object. Each entry's `get(yb)` pulls
+  // the value out of the board's parsed config; fields that resolve to undefined
+  // are omitted from the object.
+  plugin.boardConfigFields = {
+    name: (yb) => yb.getBoardName(),
+    uuid: (yb) => yb.config.network && yb.config.network.uuid,
+    hostname: (yb) => yb.hostname,
+    firmware_version: (yb) => yb.config.app && yb.config.app.firmware_version,
+    hardware_version: (yb) => yb.config.app && yb.config.app.hardware_version,
+    build_time: (yb) => yb.config.app && yb.config.app.build_time,
+    schema_version: (yb) => yb.config.schema_version,
+    brightness: (yb) => yb.config.config && yb.config.config.brightness,
+    use_ssl: (yb) => yb.config.http && yb.config.http.ssl_enabled,
+    api_enabled: (yb) => yb.config.http && yb.config.http.api_enabled,
+    serial_enabled: (yb) => yb.config.protocol && yb.config.protocol.serial_enabled,
+    ota_enabled: (yb) => yb.config.ota && yb.config.ota.arduino_ota_enabled,
+    mqtt_enabled: (yb) => yb.config.mqtt && yb.config.mqtt.enabled,
+    ha_integration_enabled: (yb) => yb.config.mqtt && yb.config.mqtt.ha_integration_enabled,
+    navico_enabled: (yb) => yb.config.navico && yb.config.navico.enabled,
+  };
+
+  // Per-channel config fields copied into each channel entry of the config
+  // object. The board also carries *Melody fields — trivia, deliberately omitted.
+  plugin.channelConfigFields = [
+    "id",
+    "key",
+    "name",
+    "type",
+    "enabled",
+    "hasPWM",
+    "hasCurrent",
+    "isDimmable",
+    "softFuse",
+    "softFuseType",
+    "defaultState",
+  ];
+
+  // Per-channel live telemetry, published from `update` messages. `scale`
+  // (multiply) and `offset` (add, applied after scale) convert the board's value
+  // into a SignalK base unit before it is published.
   //   aH (amp-hours)   -> C (Coulombs)  x3600
   //   wH (watt-hours)  -> J (Joules)    x3600
   //   temperature (°C) -> K (Kelvin)    +273.15
-  plugin.pwmMetas = {
-    id: { description: "ID of each channel" },
-    key: { description: "User defined key (slug) of channel" },
-    name: { description: "User defined name of channel" },
-    type: { description: "Channel type (e.g. bilge_pump, water_pump)" },
-    source: { description: "Source of last state change" },
-    enabled: { description: "Whether or not this channel is in use or should be ignored" },
-    hasPWM: { description: "Whether this channel hardware is capable of PWM (duty cycle, dimming, etc)" },
-    hasCurrent: { description: "Whether this channel has current monitoring" },
-    softFuse: { units: "A", description: "Software defined fuse, in amps" },
-    softFuseType: { description: "Soft-fuse trip behavior (e.g. SLOW, FAST)" },
-    isDimmable: { description: "Whether the channel has dimming enabled or not" },
-    defaultState: { description: "State the channel powers up in" },
+  plugin.channelLiveMetas = {
     state: { description: "Whether the channel is on or not" },
+    source: { description: "Source of last state change" },
     duty: { units: "ratio", description: "Duty cycle as a ratio from 0 to 1" },
     voltage: { units: "V", description: "Voltage of channel" },
     current: { units: "A", description: "Current of channel" },
@@ -46,6 +81,14 @@ module.exports = function (app) {
     temperature: { units: "K", description: "Temperature of channel", offset: 273.15 },
     aH: { units: "C", description: "Consumed charge since board restart", scale: 3600 },
     wH: { units: "J", description: "Consumed energy since board restart", scale: 3600 },
+  };
+
+  // Build a SignalK meta object from a whitelist entry (units optional).
+  plugin.buildMeta = function (meta) {
+    const out = { description: meta.description };
+    if (meta.units)
+      out.units = meta.units;
+    return out;
   };
 
   plugin.start = function (options, _restartPlugin) {
@@ -213,11 +256,46 @@ module.exports = function (app) {
       return channels.find((c) => c.id === id);
     };
 
-    // Shared by config and update messages: walk a list of PWM channels and
-    // publish a delta (and, once, a meta) for every reported field of every
-    // enabled channel. `channels` comes from config.pwm.channels (config) or the
-    // flat data.pwm array (updates); both carry `id` and `key`.
-    yb.queueChannels = function (channels) {
+    // Resolve a channel's SignalK path segment: its human-readable `key` slug
+    // (e.g. "fresh-water-pump"), falling back to the numeric id if unset. The
+    // numeric id is still published for control commands, which use it.
+    yb.channelSegment = function (cfg, ch) {
+      return cfg.key || ch.key || ch.id;
+    };
+
+    // Assemble the whitelisted board + channel config into one plain object.
+    // Board fields sit at the top level; enabled channels go under `channels`,
+    // keyed by the same slug used for their live-data paths.
+    yb.buildConfig = function () {
+      const out = {};
+      for (const [key, get] of Object.entries(plugin.boardConfigFields)) {
+        const value = get(this);
+        if (value !== undefined)
+          out[key] = value;
+      }
+
+      const channels = {};
+      for (const ch of (this.config.pwm && this.config.pwm.channels) || []) {
+        const cfg = this.getChannelConfig(ch.id);
+        if (!(cfg && cfg.enabled))
+          continue;
+
+        const entry = {};
+        for (const key of plugin.channelConfigFields) {
+          if (ch[key] !== undefined)
+            entry[key] = ch[key];
+        }
+        channels[this.channelSegment(cfg, ch)] = entry;
+      }
+      out.channels = channels;
+
+      return out;
+    };
+
+    // Publish live channel telemetry under the main data path. Called from
+    // `update` messages and whitelisted by channelLiveMetas, with unit
+    // conversion applied via each meta's scale/offset.
+    yb.queueChannelLive = function (channels) {
       let mainPath = this.getMainBoardPath();
 
       for (const ch of channels || []) {
@@ -225,23 +303,16 @@ module.exports = function (app) {
         if (!(cfg && cfg.enabled))
           continue;
 
-        // Paths are keyed by the channel's human-readable `key` slug (e.g.
-        // "fresh-water-pump"), falling back to the numeric id if unset. The
-        // numeric id is still published for control commands, which use it.
-        let chPath = `${mainPath}.channel.${cfg.key || ch.key || ch.id}`;
-        for (const [key, value] of Object.entries(ch)) {
-          const meta = plugin.pwmMetas[key];
-          let scaled = value;
-          if (meta) {
-            if (meta.scale)
-              scaled = scaled * meta.scale;
-            if (meta.offset)
-              scaled = scaled + meta.offset;
-          }
-          this.bus.queueDelta(`${chPath}.${key}`, scaled);
-
-          if (meta)
-            this.bus.queueMeta(`${chPath}.${key}`, meta.units ? { units: meta.units, description: meta.description } : { description: meta.description });
+        let chPath = `${mainPath}.channel.${this.channelSegment(cfg, ch)}`;
+        for (const [key, meta] of Object.entries(plugin.channelLiveMetas)) {
+          if (ch[key] === undefined)
+            continue;
+          let scaled = ch[key];
+          if (meta.scale)
+            scaled = scaled * meta.scale;
+          if (meta.offset)
+            scaled = scaled + meta.offset;
+          this.bus.queueConsolidated(`${chPath}.${key}`, scaled, plugin.buildMeta(meta));
         }
       }
 
@@ -260,8 +331,8 @@ module.exports = function (app) {
       this.config = data.config || {};
 
       let mainPath = this.getMainBoardPath();
-      const appInfo = this.config.app || {};
-      const network = this.config.network || {};
+      let boardPath = this.getBoardPath();
+      let configPath = this.getConfigBoardPath();
 
       // Passing raw JSON to the board's websocket lets the FrothFET web protocol
       // be driven straight from SignalK PUTs. Register once per connection.
@@ -270,20 +341,18 @@ module.exports = function (app) {
         this.putHandlerRegistered = true;
       }
 
-      this.bus.queueConsolidated(`${mainPath}.board.firmware_version`, appInfo.firmware_version, { description: "Firmware version of the board" });
-      this.bus.queueConsolidated(`${mainPath}.board.hardware_version`, appInfo.hardware_version, { description: "Hardware version of the board" });
-      this.bus.queueConsolidated(`${mainPath}.board.name`, this.getBoardName(), { description: "User defined name of the board" });
-      this.bus.queueConsolidated(`${mainPath}.board.uuid`, network.uuid, { description: "Unique ID of the board" });
-      this.bus.queueConsolidated(`${mainPath}.board.hostname`, this.hostname, { description: "Hostname of the board" });
-      this.bus.queueConsolidated(`${mainPath}.board.use_ssl`, this.config.http && this.config.http.ssl_enabled, { description: "Whether the app uses SSL or not" });
-      this.bus.queueMeta(`${mainPath}.board.uptime`, { units: "s", description: "Seconds since the last reboot" });
+      // Static board + channel config is the canonical reference, published as a
+      // single JSON object at the per-board config path (one delta, not a path
+      // per field).
+      this.bus.queueConsolidated(configPath, this.buildConfig(), { description: "Board and channel configuration" });
+
+      // Live board telemetry hangs off the board path; register its metas up
+      // front so they exist before the first update arrives.
+      this.bus.queueMeta(`${boardPath}.uptime`, { units: "s", description: "Seconds since the last reboot" });
 
       //only publish the bus voltage meta if the board reports the capability.
       if (data.capabilities && data.capabilities.bus_voltage)
-        this.bus.queueMeta(`${mainPath}.board.bus_voltage`, { units: "V", description: "Supply voltage to the board" });
-
-      //common handler for config and update
-      this.queueChannels(this.config.pwm && this.config.pwm.channels);
+        this.bus.queueMeta(`${boardPath}.bus_voltage`, { units: "V", description: "Supply voltage to the board" });
 
       //actually send them off now.
       this.bus.sendUpdates();
@@ -293,18 +362,18 @@ module.exports = function (app) {
       if (!this.config)
         return;
 
-      let mainPath = this.getMainBoardPath();
+      let boardPath = this.getBoardPath();
 
       //some boards don't have this.
       if (data.bus_voltage)
-        this.bus.queueConsolidated(`${mainPath}.board.bus_voltage`, data.bus_voltage, { units: "V", description: "Bus supply voltage" });
+        this.bus.queueConsolidated(`${boardPath}.bus_voltage`, data.bus_voltage, { units: "V", description: "Bus supply voltage" });
 
       //store our uptime
       if (data.uptime)
-        this.bus.queueConsolidated(`${mainPath}.board.uptime`, Math.round(data.uptime / 1000000), { units: "s", description: "Uptime since the last reboot" });
+        this.bus.queueConsolidated(`${boardPath}.uptime`, Math.round(data.uptime / 1000000), { units: "s", description: "Uptime since the last reboot" });
 
-      //common handler for config and update (updates carry a flat pwm array)
-      this.queueChannels(data.pwm);
+      //live per-channel telemetry (updates carry a flat pwm array)
+      this.queueChannelLive(data.pwm);
 
       //actually send them off now.
       this.bus.sendUpdates();
@@ -329,6 +398,28 @@ module.exports = function (app) {
         default:
           return base;
       }
+    };
+
+    // Prefix for this board's live board-level telemetry (uptime, bus_voltage).
+    // These are per-board scalars, so under the flat "none" scheme we insert the
+    // boardname to keep multiple boards from colliding; the namespaced schemes
+    // already carry a board segment via getMainBoardPath().
+    yb.getBoardPath = function () {
+      if (plugin.pathScheme === "none")
+        return `${this.getMainBoardPath()}.board.${this.boardname}`;
+      return `${this.getMainBoardPath()}.board`;
+    };
+
+    // Root path for this board's static config. Config is always per-board (so
+    // it stays unambiguous even under the flat "none" scheme), keyed by uuid
+    // when that scheme is selected and the uuid is known, else by boardname.
+    yb.getConfigBoardPath = function () {
+      const base = "electrical.frothfet.config";
+      if (plugin.pathScheme === "uuid") {
+        const uuid = this.config && this.config.network && this.config.network.uuid;
+        return `${base}.${uuid || this.boardname}`;
+      }
+      return `${base}.${this.boardname}`;
     };
 
     // PUT handler: forward the raw JSON value straight to the board's websocket.

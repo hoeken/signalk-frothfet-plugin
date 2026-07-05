@@ -187,14 +187,21 @@ test("createYarrboard", async (t) => {
     const deltas = collectDeltas(app);
     const metas = collectMetas(app);
 
-    assert.equal(deltas["electrical.frothfet.ff.board.firmware_version"], "1.2.3");
-    assert.equal(deltas["electrical.frothfet.ff.board.hardware_version"], "rev-a");
-    assert.equal(deltas["electrical.frothfet.ff.board.name"], "My Frothfet");
-    assert.equal(deltas["electrical.frothfet.ff.board.uuid"], "abcd-1234");
-    assert.equal(deltas["electrical.frothfet.ff.board.hostname"], "ff.local");
-    assert.equal(deltas["electrical.frothfet.ff.board.use_ssl"], false);
-    assert.equal(deltas["electrical.frothfet.ff.channel.nav-lights.name"], "Nav Lights");
-    // bus_voltage meta is registered because the board declared the capability.
+    // All static config is one JSON object at the per-board config path.
+    const cfg = deltas["electrical.frothfet.config.ff"];
+    assert.equal(cfg.firmware_version, "1.2.3");
+    assert.equal(cfg.hardware_version, "rev-a");
+    assert.equal(cfg.name, "My Frothfet");
+    assert.equal(cfg.uuid, "abcd-1234");
+    assert.equal(cfg.hostname, "ff.local");
+    assert.equal(cfg.use_ssl, false);
+    // Channels are nested inside the same object, keyed by slug.
+    assert.equal(cfg.channels["nav-lights"].name, "Nav Lights");
+    // No per-field config paths, and no duplication on the live data path.
+    assert.equal(deltas["electrical.frothfet.config.ff.firmware_version"], undefined);
+    assert.equal(deltas["electrical.frothfet.ff.board.name"], undefined);
+    // The config object carries a meta description; bus_voltage meta is on the live path.
+    assert.equal(metas["electrical.frothfet.config.ff"].description, "Board and channel configuration");
     assert.equal(metas["electrical.frothfet.ff.board.bus_voltage"].units, "V");
 
     // A single control PUT handler is registered on the board path.
@@ -207,7 +214,7 @@ test("createYarrboard", async (t) => {
     assert.equal(app.putHandlers.length, 1, "PUT handler registered once per connection");
   });
 
-  await t.test("handleConfig publishes per-channel metadata keyed by channel key", () => {
+  await t.test("channels are nested in the config object, keyed by slug, trivia dropped", () => {
     const app = createFakeApp();
     const plugin = createPlugin(app);
     plugin.pathScheme = "boardname"; // assert the board-namespaced paths
@@ -229,23 +236,84 @@ test("createYarrboard", async (t) => {
       },
     ]));
 
-    const d = collectDeltas(app);
-    const m = collectMetas(app);
+    const ch = collectDeltas(app)["electrical.frothfet.config.ff"].channels["fresh-water-pump"];
 
-    assert.equal(d["electrical.frothfet.ff.channel.fresh-water-pump.name"], "Fresh Water Pump");
-    assert.equal(d["electrical.frothfet.ff.channel.fresh-water-pump.type"], "water_pump");
-    assert.equal(d["electrical.frothfet.ff.channel.fresh-water-pump.enabled"], true);
-    close(d["electrical.frothfet.ff.channel.fresh-water-pump.softFuse"], 20, "softFuse");
-    assert.equal(d["electrical.frothfet.ff.channel.fresh-water-pump.defaultState"], "ON");
-    assert.equal(d["electrical.frothfet.ff.channel.fresh-water-pump.softFuseType"], "SLOW");
-    // Fields without a meta entry are still published as raw deltas.
-    assert.equal(d["electrical.frothfet.ff.channel.fresh-water-pump.bypassMelody"], "MORSE_O");
-
-    assert.equal(m["electrical.frothfet.ff.channel.fresh-water-pump.softFuse"].units, "A");
-    assert.equal(m["electrical.frothfet.ff.channel.fresh-water-pump.type"].description, "Channel type (e.g. bilge_pump, water_pump)");
+    assert.equal(ch.id, 5);
+    assert.equal(ch.name, "Fresh Water Pump");
+    assert.equal(ch.type, "water_pump");
+    assert.equal(ch.enabled, true);
+    close(ch.softFuse, 20, "softFuse");
+    assert.equal(ch.defaultState, "ON");
+    assert.equal(ch.softFuseType, "SLOW");
+    // Fields not on the whitelist (the *Melody trivia) are dropped entirely.
+    assert.equal(ch.bypassMelody, undefined);
   });
 
-  await t.test("the default \"none\" scheme publishes paths without a board segment", () => {
+  await t.test("getConfigBoardPath is always per-board and honours the uuid scheme", () => {
+    const plugin = createPlugin(createFakeApp());
+    const yb = plugin.createYarrboard("ff.local");
+
+    plugin.pathScheme = "none";
+    assert.equal(yb.getConfigBoardPath(), "electrical.frothfet.config.ff", "none -> boardname");
+
+    plugin.pathScheme = "boardname";
+    assert.equal(yb.getConfigBoardPath(), "electrical.frothfet.config.ff");
+
+    plugin.pathScheme = "uuid";
+    assert.equal(yb.getConfigBoardPath(), "electrical.frothfet.config.ff", "no config yet -> boardname fallback");
+    yb.handleConfig(configMessage([], { uuid: "abcd-1234" }));
+    assert.equal(yb.getConfigBoardPath(), "electrical.frothfet.config.abcd-1234", "uuid once config arrives");
+  });
+
+  await t.test("board config whitelist publishes settings and never leaks secrets", () => {
+    const app = createFakeApp();
+    const plugin = createPlugin(app);
+    plugin.pathScheme = "boardname";
+    const yb = plugin.createYarrboard("ff.local");
+
+    // A fuller config envelope: real firmware carries secrets alongside settings.
+    yb.handleConfig({
+      msg: "config",
+      config: {
+        schema_version: 2,
+        app: { firmware_version: "2.6.1", build_time: "2026-06-13T21:47:01Z" },
+        config: { name: "Misc", brightness: 1 },
+        network: { uuid: "abc", local_hostname: "frothfet-misc", wifi_ssid: "Phoenix", wifi_pass: "hunter2" },
+        http: { api_enabled: true, ssl_enabled: false, server_key: "-----KEY-----" },
+        auth: { admin_user: "admin", admin_pass: "sekret", guest_pass: "guestpw" },
+        mqtt: { enabled: true, ha_integration_enabled: true, mqtt_user: "yb", mqtt_pass: "mqttpw" },
+        navico: { enabled: true },
+        ota: { arduino_ota_enabled: true },
+        protocol: { serial_enabled: false },
+        pwm: { channels: [] },
+      },
+    });
+
+    const cfg = collectDeltas(app)["electrical.frothfet.config.ff"];
+
+    // Whitelisted settings and integration flags are included.
+    assert.equal(cfg.schema_version, 2);
+    assert.equal(cfg.build_time, "2026-06-13T21:47:01Z");
+    assert.equal(cfg.brightness, 1);
+    assert.equal(cfg.api_enabled, true);
+    assert.equal(cfg.serial_enabled, false);
+    assert.equal(cfg.ota_enabled, true);
+    assert.equal(cfg.mqtt_enabled, true);
+    assert.equal(cfg.ha_integration_enabled, true);
+    assert.equal(cfg.navico_enabled, true);
+
+    // No secret or credential appears anywhere in the config object.
+    const blob = JSON.stringify(cfg);
+    for (const secret of ["hunter2", "-----KEY-----", "sekret", "guestpw", "mqttpw"])
+      assert.ok(!blob.includes(secret), `secret leaked: ${secret}`);
+
+    // SSID, usernames and MQTT endpoint aren't whitelisted either.
+    assert.equal(cfg.wifi_ssid, undefined);
+    assert.equal(cfg.admin_user, undefined);
+    assert.equal(cfg.mqtt_user, undefined);
+  });
+
+  await t.test("the default \"none\" scheme publishes live paths without a board segment", () => {
     const app = createFakeApp();
     const plugin = createPlugin(app); // pathScheme defaults to "none"
     const yb = plugin.createYarrboard("ff.local");
@@ -254,14 +322,19 @@ test("createYarrboard", async (t) => {
       [{ id: 1, enabled: true, key: "nav-lights", name: "Nav Lights" }],
       { name: "My Frothfet" },
     ));
+    yb.handleUpdate({ pwm: [{ id: 1, key: "nav-lights", state: "ON" }] });
 
     const d = collectDeltas(app);
-    assert.equal(d["electrical.frothfet.board.name"], "My Frothfet");
-    assert.equal(d["electrical.frothfet.channel.nav-lights.name"], "Nav Lights");
-    // No hostname segment is injected between frothfet and the channel.
-    assert.equal(d["electrical.frothfet.ff.channel.nav-lights.name"], undefined);
+    // Live telemetry has no board segment under "none".
+    assert.equal(d["electrical.frothfet.channel.nav-lights.state"], "ON");
+    assert.equal(d["electrical.frothfet.ff.channel.nav-lights.state"], undefined);
 
-    // The control PUT handler is registered on the un-namespaced path too.
+    // The config object is always per-board (boardname under "none").
+    const cfg = d["electrical.frothfet.config.ff"];
+    assert.equal(cfg.name, "My Frothfet");
+    assert.equal(cfg.channels["nav-lights"].name, "Nav Lights");
+
+    // The control PUT handler is registered on the un-namespaced path.
     assert.equal(app.putHandlers[0].path, "electrical.frothfet.control");
   });
 
@@ -373,6 +446,25 @@ test("createYarrboard", async (t) => {
     const d = collectDeltas(app);
     assert.equal(d["electrical.frothfet.ff.board.bus_voltage"], 13.2);
     assert.equal(d["electrical.frothfet.ff.board.uptime"], 5); // us -> s (round)
+  });
+
+  await t.test("board telemetry carries a board segment under the \"none\" scheme", () => {
+    const app = createFakeApp();
+    const plugin = createPlugin(app); // pathScheme defaults to "none"
+    const yb = plugin.createYarrboard("ff.local");
+
+    yb.handleConfig(configMessage([], { capabilities: { bus_voltage: {} } }));
+    yb.handleUpdate({ bus_voltage: 13.2, uptime: 5_000_000 });
+
+    const d = collectDeltas(app);
+    const m = collectMetas(app);
+
+    // Under "none" the boardname is inserted so multiple boards don't collide.
+    assert.equal(d["electrical.frothfet.board.ff.bus_voltage"], 13.2);
+    assert.equal(d["electrical.frothfet.board.ff.uptime"], 5); // us -> s (round)
+    assert.equal(m["electrical.frothfet.board.ff.bus_voltage"].units, "V");
+    // The un-segmented path is no longer used.
+    assert.equal(d["electrical.frothfet.board.bus_voltage"], undefined);
   });
 
   await t.test("doSendJSON forwards the raw value to the board websocket", () => {
